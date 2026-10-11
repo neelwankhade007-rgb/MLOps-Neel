@@ -8,6 +8,7 @@ import {
 import { Toaster } from 'react-hot-toast';
 import { AuthProvider } from './context/AuthContext';
 import { useAuth } from './hooks/useAuth';
+import { TrainingProvider } from './context/TrainingContext';
 import AppLayout from './components/layout/AppLayout';
 import ThemeToggle from './components/layout/ThemeToggle';
 import Loading from './components/common/Loading';
@@ -38,16 +39,18 @@ const AppContent: React.FC = () => {
   return (
     <Router>
       <Toaster position="top-right" />
-      <AppLayout>
-        <Routes>
-          <Route path="/" element={<DashboardPage />} />
-          <Route path="/datasets" element={<DatasetsPage />} />
-          <Route path="/training" element={<TrainingPage />} />
-          <Route path="/registry" element={<RegistryPage />} />
-          <Route path="/predict" element={<PredictPage />} />
-          <Route path="*" element={<Navigate to="/" />} />
-        </Routes>
-      </AppLayout>
+      <TrainingProvider>
+        <AppLayout>
+          <Routes>
+            <Route path="/" element={<DashboardPage />} />
+            <Route path="/datasets" element={<DatasetsPage />} />
+            <Route path="/training" element={<TrainingPage />} />
+            <Route path="/registry" element={<RegistryPage />} />
+            <Route path="/predict" element={<PredictPage />} />
+            <Route path="*" element={<Navigate to="/" />} />
+          </Routes>
+        </AppLayout>
+      </TrainingProvider>
     </Router>
   );
 };

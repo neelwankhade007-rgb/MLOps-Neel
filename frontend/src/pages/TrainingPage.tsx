@@ -13,10 +13,13 @@ export const TrainingPage: React.FC = () => {
     search,
     setSearch,
     loading,
+    error,
     completedJobs,
     runningJobs,
     failedJobs,
+    legacyJobs,
     startTrainingJob,
+    refreshTraining,
   } = useTraining();
 
   return (
@@ -47,7 +50,11 @@ export const TrainingPage: React.FC = () => {
               <p className="text-3xl font-bold text-slate-900 mt-1">
                 {jobs.length}
               </p>
-              <p className="text-xs text-slate-400 mt-1">Training executions</p>
+              <p className="text-xs text-slate-400 mt-1">
+                {legacyJobs > 0
+                  ? `${legacyJobs} legacy record${legacyJobs > 1 ? 's' : ''}`
+                  : 'Total training records'}
+              </p>
             </div>
             <div className="p-3 rounded-xl bg-blue-50 text-blue-600">
               <Activity size={24} />
@@ -120,6 +127,8 @@ export const TrainingPage: React.FC = () => {
         datasets={datasets}
         search={search}
         onSearchChange={setSearch}
+        error={error}
+        onRetry={refreshTraining}
       />
     </div>
   );

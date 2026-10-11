@@ -4,6 +4,7 @@ import Card from '../common/Card';
 import Input from '../common/Input';
 import Button from '../common/Button';
 import type { Experiment, ModelRegisterRequest } from '../../types/model';
+import { getPrimaryMetric } from '../../utils/formatters';
 
 export interface ExperimentListProps {
   experiments: Experiment[];
@@ -73,13 +74,24 @@ export const ExperimentList: React.FC<ExperimentListProps> = ({
               className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-700 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
             >
               <option value="">Select experiment</option>
-              {experiments.map(experiment => (
-                <option key={experiment.id} value={experiment.id}>
-                  {experiment.name ||
-                    experiment.experiment_name ||
-                    `Experiment #${experiment.id}`}
-                </option>
-              ))}
+              {experiments.map(experiment => {
+                const metricInfo = getPrimaryMetric(experiment);
+                const metricLabel = !metricInfo.isUnavailable
+                  ? ` • ${metricInfo.name}: ${metricInfo.value}`
+                  : '';
+                return (
+                  <option key={experiment.id} value={experiment.id}>
+                    {experiment.name ||
+                      experiment.experiment_name ||
+                      `Experiment #${experiment.id}`}
+                    {experiment.algorithm
+                      ? ` (${experiment.algorithm}${metricLabel})`
+                      : metricLabel
+                      ? ` (${metricLabel.slice(3)})`
+                      : ''}
+                  </option>
+                );
+              })}
             </select>
           </div>
         </div>

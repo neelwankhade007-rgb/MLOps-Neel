@@ -155,20 +155,44 @@ def start_training(req: ExperimentCreate, db: Session = Depends(get_db), current
     if not dataset:
         raise HTTPException(status_code=404, detail="Dataset not found")
         
-    try:
-        acc, run_id = train_model(dataset.file_path, req.target_column, req.algorithm)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Training failed: {str(e)}")
-    
-    exp = Experiment(name=f"{dataset.name}_{req.algorithm}", dataset_id=dataset.id, algorithm=req.algorithm, accuracy=acc, run_id=run_id)
+    exp = Experiment(
+        name=f"{dataset.name}_{req.algorithm}",
+        dataset_id=dataset.id,
+        algorithm=req.algorithm,
+        status="running",
+        created_at=datetime.utcnow()
+    )
     db.add(exp)
     db.commit()
     db.refresh(exp)
-    return {"success": True, "experiment": exp}
+
+    try:
+        result = train_model(dataset.file_path, req.target_column, req.algorithm)
+        exp.algorithm = result["resolved_algorithm"]
+        exp.task_type = result["task_type"]
+        exp.primary_metric = result["primary_metric"]
+        exp.accuracy = result["primary_metric_value"]
+        exp.metrics = result["metrics"]
+        exp.run_id = result["run_id"]
+        exp.status = "completed"
+        db.commit()
+        db.refresh(exp)
+        return {"success": True, "experiment": exp.to_dict()}
+    except Exception as e:
+        safe_error = str(e)
+        db.rollback()
+        try:
+            exp.status = "failed"
+            exp.error_message = safe_error
+            db.commit()
+        except Exception:
+            db.rollback()
+        raise HTTPException(status_code=400, detail=f"Training failed: {safe_error}")
 
 @app.get("/api/v1/experiments")
 def get_experiments(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    return db.query(Experiment).all()
+    experiments = db.query(Experiment).order_by(Experiment.id.desc()).all()
+    return [exp.to_dict() for exp in experiments]
 
 # Model Registry
 @app.post("/api/v1/models")
@@ -309,7 +333,14 @@ def predict(deployment_name: str, req: PredictionRequest, db: Session = Depends(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Prediction failed: {str(e)}")
     
+    raw_pred = prediction[0].item() if hasattr(prediction[0], 'item') else prediction[0]
+    classes = explicit_schema.get("classes")
+    if classes and isinstance(raw_pred, (int, float)) and int(raw_pred) < len(classes):
+        pred_output = str(classes[int(raw_pred)])
+    else:
+        pred_output = str(raw_pred)
+
     return {
-        "prediction": str(prediction[0].item() if hasattr(prediction[0], 'item') else prediction[0]),
+        "prediction": pred_output,
         "deployment": deployment_name
     }

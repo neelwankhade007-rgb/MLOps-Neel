@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey, create_engine, text
+from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey, create_engine, text, JSON
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
@@ -34,6 +34,27 @@ class Experiment(Base):
     accuracy = Column(Float, nullable=True)
     run_id = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    status = Column(String, nullable=True)
+    task_type = Column(String, nullable=True)
+    primary_metric = Column(String, nullable=True)
+    metrics = Column(JSON, nullable=True)
+    error_message = Column(String, nullable=True)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "name": self.name,
+            "dataset_id": self.dataset_id,
+            "algorithm": self.algorithm,
+            "accuracy": self.accuracy,
+            "run_id": self.run_id,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "status": self.status,
+            "task_type": self.task_type,
+            "primary_metric": self.primary_metric,
+            "metrics": self.metrics,
+            "error_message": self.error_message,
+        }
 
 class RegisteredModel(Base):
     __tablename__ = "app_registered_models"
@@ -54,10 +75,15 @@ class Deployment(Base):
 
 Base.metadata.create_all(bind=engine)
 
-# Ensure existing deployments table has status column
+# Ensure existing tables have newly added columns
 with engine.connect() as _conn:
     _conn.execute(text("ALTER TABLE deployments ADD COLUMN IF NOT EXISTS status VARCHAR DEFAULT 'active'"))
     _conn.execute(text("UPDATE deployments SET status = 'active' WHERE status IS NULL"))
+    _conn.execute(text("ALTER TABLE app_experiments ADD COLUMN IF NOT EXISTS status VARCHAR"))
+    _conn.execute(text("ALTER TABLE app_experiments ADD COLUMN IF NOT EXISTS task_type VARCHAR"))
+    _conn.execute(text("ALTER TABLE app_experiments ADD COLUMN IF NOT EXISTS primary_metric VARCHAR"))
+    _conn.execute(text("ALTER TABLE app_experiments ADD COLUMN IF NOT EXISTS metrics JSON"))
+    _conn.execute(text("ALTER TABLE app_experiments ADD COLUMN IF NOT EXISTS error_message TEXT"))
     _conn.commit()
 
 # Pydantic Schemas

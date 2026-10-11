@@ -1,5 +1,5 @@
 import React from 'react';
-import { BrainCircuit } from 'lucide-react';
+import { BrainCircuit, AlertCircle } from 'lucide-react';
 import Card from '../common/Card';
 import TrainingJobCard from './TrainingJobCard';
 import type { TrainingJob } from '../../types/training';
@@ -10,6 +10,8 @@ export interface TrainingJobListProps {
   datasets: Dataset[];
   search: string;
   onSearchChange: (value: string) => void;
+  error?: string | null;
+  onRetry?: () => void;
 }
 
 export const TrainingJobList: React.FC<TrainingJobListProps> = ({
@@ -17,6 +19,8 @@ export const TrainingJobList: React.FC<TrainingJobListProps> = ({
   datasets,
   search,
   onSearchChange,
+  error,
+  onRetry,
 }) => {
   return (
     <div className="space-y-4">
@@ -37,7 +41,28 @@ export const TrainingJobList: React.FC<TrainingJobListProps> = ({
         />
       </div>
 
-      {jobs.length > 0 ? (
+      {error ? (
+        <Card className="p-12 text-center border-red-100 bg-red-50/30">
+          <div className="mx-auto w-16 h-16 rounded-2xl bg-red-100 flex items-center justify-center text-red-600">
+            <AlertCircle size={30} />
+          </div>
+          <h3 className="mt-5 text-lg font-semibold text-slate-800">
+            Failed to load training history
+          </h3>
+          <p className="mt-2 text-sm text-slate-500 max-w-md mx-auto">
+            {error}. Please check your connection or try again.
+          </p>
+          {onRetry && (
+            <button
+              type="button"
+              onClick={onRetry}
+              className="mt-4 px-4 py-2 bg-slate-900 text-white rounded-xl text-sm font-medium hover:bg-slate-800 transition"
+            >
+              Retry
+            </button>
+          )}
+        </Card>
+      ) : jobs.length > 0 ? (
         <div className="space-y-4">
           {jobs.map((job, index) => (
             <TrainingJobCard

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Database,
   BrainCircuit,
@@ -15,8 +15,23 @@ import TrainingActivityChart from '../components/dashboard/TrainingActivityChart
 import ModelPerformanceChart from '../components/dashboard/ModelPerformanceChart';
 import DeploymentHealthChart from '../components/dashboard/DeploymentHealthChart';
 import RecentActivity from '../components/dashboard/RecentActivity';
+import { useTraining } from '../hooks/useTraining';
+import { datasetApi } from '../api/datasetApi';
+import { modelApi } from '../api/modelApi';
+import { deploymentApi } from '../api/deploymentApi';
 
 export const DashboardPage: React.FC = () => {
+  const { jobs, completedJobs, runningJobs, failedJobs, legacyJobs } = useTraining();
+  const [datasetCount, setDatasetCount] = useState<number | null>(null);
+  const [modelCount, setModelCount] = useState<number | null>(null);
+  const [deploymentCount, setDeploymentCount] = useState<number | null>(null);
+
+  useEffect(() => {
+    datasetApi.getDatasets().then(d => setDatasetCount(d.length)).catch(() => {});
+    modelApi.getModels().then(m => setModelCount(m.length)).catch(() => {});
+    deploymentApi.getDeployments().then(dep => setDeploymentCount(dep.length)).catch(() => {});
+  }, []);
+
   const activeDeployments = [
     {
       name: 'Customer Churn',
@@ -54,8 +69,8 @@ export const DashboardPage: React.FC = () => {
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
         <StatCard
           label="Datasets"
-          value="12"
-          subtext="↑ 2 this week"
+          value={datasetCount != null ? String(datasetCount) : '—'}
+          subtext="Available for training"
           icon={Database}
           iconBgColor="bg-blue-100"
           iconColor="text-blue-600"
@@ -63,8 +78,8 @@ export const DashboardPage: React.FC = () => {
 
         <StatCard
           label="Training Jobs"
-          value="8"
-          subtext="6 completed"
+          value={String(jobs.length)}
+          subtext={`${completedJobs} completed, ${failedJobs} failed${runningJobs > 0 ? `, ${runningJobs} running` : ''}${legacyJobs > 0 ? ` (${legacyJobs} legacy)` : ''}`}
           icon={BrainCircuit}
           iconBgColor="bg-purple-100"
           iconColor="text-purple-600"
@@ -72,8 +87,8 @@ export const DashboardPage: React.FC = () => {
 
         <StatCard
           label="Registered Models"
-          value="6"
-          subtext="2 in production"
+          value={modelCount != null ? String(modelCount) : '—'}
+          subtext="Available in registry"
           subtextColor="text-indigo-600"
           icon={Box}
           iconBgColor="bg-indigo-100"
@@ -82,8 +97,8 @@ export const DashboardPage: React.FC = () => {
 
         <StatCard
           label="Deployments"
-          value="3"
-          subtext="2 healthy"
+          value={deploymentCount != null ? String(deploymentCount) : '—'}
+          subtext="Active model endpoints"
           icon={Rocket}
           iconBgColor="bg-green-100"
           iconColor="text-green-600"
