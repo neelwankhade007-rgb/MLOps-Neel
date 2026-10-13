@@ -11,7 +11,10 @@ from models import (
     SessionLocal, User, Dataset, Experiment, RegisteredModel, Deployment,
     UserCreate, DatasetCreate, ExperimentCreate, ModelRegister, DeploymentCreate, PredictionRequest
 )
-from ml_utils import init_minio, upload_dataset, train_model, load_mlflow_model
+from ml_utils import (
+    init_minio, upload_dataset, train_model, load_mlflow_model,
+    delete_dataset_file, delete_mlflow_run
+)
 
 import uuid
 
@@ -50,6 +53,19 @@ def startup_event():
     # Auto-load existing deployments into memory on startup
     db = SessionLocal()
     try:
+        # Backfill target_column for existing experiments from MLflow schema
+        exps = db.query(Experiment).filter(Experiment.target_column.is_(None), Experiment.run_id.isnot(None)).all()
+        if exps:
+            import mlflow
+            for e in exps:
+                try:
+                    schema_dict = mlflow.artifacts.load_dict(f"runs:/{e.run_id}/explicit_schema.json")
+                    if schema_dict and "target_column" in schema_dict:
+                        e.target_column = schema_dict["target_column"]
+                except Exception:
+                    pass
+            db.commit()
+
         deployments = db.query(Deployment).all()
         for dep in deployments:
             model_record = db.query(RegisteredModel).filter(RegisteredModel.id == dep.model_id).first()
@@ -120,6 +136,38 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depend
 def get_session_info():
     return {"session_id": BACKEND_SESSION_ID}
 
+# Resource Cleanup Helpers
+def check_resource_ownership(resource, current_user: User):
+    if hasattr(resource, 'user_id') and resource.user_id is not None:
+        if resource.user_id != current_user.id:
+            raise HTTPException(status_code=403, detail="Not authorized to delete this resource")
+
+def delete_deployment_internal(dep: Deployment, db: Session):
+    deployed_models.pop(dep.name, None)
+    db.delete(dep)
+
+def delete_model_internal(model: RegisteredModel, db: Session):
+    deployments = db.query(Deployment).filter(Deployment.model_id == model.id).all()
+    for dep in deployments:
+        delete_deployment_internal(dep, db)
+    db.delete(model)
+
+def delete_experiment_internal(exp: Experiment, db: Session):
+    models = db.query(RegisteredModel).filter(RegisteredModel.experiment_id == exp.id).all()
+    for m in models:
+        delete_model_internal(m, db)
+    if exp.run_id:
+        delete_mlflow_run(exp.run_id)
+    db.delete(exp)
+
+def delete_dataset_internal(ds: Dataset, db: Session):
+    exps = db.query(Experiment).filter(Experiment.dataset_id == ds.id).all()
+    for e in exps:
+        delete_experiment_internal(e, db)
+    if ds.file_path:
+        delete_dataset_file(ds.file_path)
+    db.delete(ds)
+
 # Dataset Routes
 @app.post("/api/v1/datasets")
 def create_dataset(
@@ -138,7 +186,7 @@ def create_dataset(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Storage error: {str(e)}")
         
-    dataset = Dataset(name=name, description=description, file_path=filename)
+    dataset = Dataset(name=name, description=description, file_path=filename, user_id=current_user.id)
     db.add(dataset)
     db.commit()
     db.refresh(dataset)
@@ -147,6 +195,25 @@ def create_dataset(
 @app.get("/api/v1/datasets")
 def get_datasets(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     return db.query(Dataset).all()
+
+@app.delete("/api/v1/datasets/{dataset_id}")
+def delete_dataset(dataset_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    ds = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+    if not ds:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    check_resource_ownership(ds, current_user)
+    delete_dataset_internal(ds, db)
+    db.commit()
+    return {"success": True, "message": f"Dataset {dataset_id} deleted successfully"}
+
+@app.delete("/api/v1/datasets")
+def clear_datasets(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    datasets = db.query(Dataset).filter((Dataset.user_id == current_user.id) | (Dataset.user_id.is_(None))).all()
+    count = len(datasets)
+    for ds in datasets:
+        delete_dataset_internal(ds, db)
+    db.commit()
+    return {"success": True, "message": f"Successfully cleared {count} datasets", "count": count}
 
 # Training Routes
 @app.post("/api/v1/training/jobs")
@@ -159,8 +226,10 @@ def start_training(req: ExperimentCreate, db: Session = Depends(get_db), current
         name=f"{dataset.name}_{req.algorithm}",
         dataset_id=dataset.id,
         algorithm=req.algorithm,
+        target_column=req.target_column,
         status="running",
-        created_at=datetime.utcnow()
+        created_at=datetime.utcnow(),
+        user_id=current_user.id
     )
     db.add(exp)
     db.commit()
@@ -169,6 +238,7 @@ def start_training(req: ExperimentCreate, db: Session = Depends(get_db), current
     try:
         result = train_model(dataset.file_path, req.target_column, req.algorithm)
         exp.algorithm = result["resolved_algorithm"]
+        exp.target_column = req.target_column
         exp.task_type = result["task_type"]
         exp.primary_metric = result["primary_metric"]
         exp.accuracy = result["primary_metric_value"]
@@ -192,13 +262,48 @@ def start_training(req: ExperimentCreate, db: Session = Depends(get_db), current
 @app.get("/api/v1/experiments")
 def get_experiments(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     experiments = db.query(Experiment).order_by(Experiment.id.desc()).all()
+    updated = False
+    for exp in experiments:
+        if not exp.target_column and exp.run_id:
+            try:
+                import mlflow
+                schema_dict = mlflow.artifacts.load_dict(f"runs:/{exp.run_id}/explicit_schema.json")
+                if schema_dict and "target_column" in schema_dict:
+                    exp.target_column = schema_dict["target_column"]
+                    updated = True
+            except Exception:
+                pass
+    if updated:
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
     return [exp.to_dict() for exp in experiments]
+
+@app.delete("/api/v1/experiments/{experiment_id}")
+def delete_experiment(experiment_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    exp = db.query(Experiment).filter(Experiment.id == experiment_id).first()
+    if not exp:
+        raise HTTPException(status_code=404, detail="Experiment not found")
+    check_resource_ownership(exp, current_user)
+    delete_experiment_internal(exp, db)
+    db.commit()
+    return {"success": True, "message": f"Experiment {experiment_id} deleted successfully"}
+
+@app.delete("/api/v1/experiments")
+def clear_experiments(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    experiments = db.query(Experiment).filter((Experiment.user_id == current_user.id) | (Experiment.user_id.is_(None))).all()
+    count = len(experiments)
+    for exp in experiments:
+        delete_experiment_internal(exp, db)
+    db.commit()
+    return {"success": True, "message": f"Successfully cleared {count} experiments", "count": count}
 
 # Model Registry
 @app.post("/api/v1/models")
 def register_model(req: ModelRegister, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     exp = db.query(Experiment).filter(Experiment.id == req.experiment_id).first()
-    model = RegisteredModel(name=req.name, experiment_id=req.experiment_id, version="v1")
+    model = RegisteredModel(name=req.name, experiment_id=req.experiment_id, version="v1", user_id=current_user.id)
     db.add(model)
     db.commit()
     db.refresh(model)
@@ -207,6 +312,25 @@ def register_model(req: ModelRegister, db: Session = Depends(get_db), current_us
 @app.get("/api/v1/models")
 def get_models(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     return db.query(RegisteredModel).all()
+
+@app.delete("/api/v1/models/{model_id}")
+def delete_model(model_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    model = db.query(RegisteredModel).filter(RegisteredModel.id == model_id).first()
+    if not model:
+        raise HTTPException(status_code=404, detail="Model not found")
+    check_resource_ownership(model, current_user)
+    delete_model_internal(model, db)
+    db.commit()
+    return {"success": True, "message": f"Model {model_id} deleted successfully"}
+
+@app.delete("/api/v1/models")
+def clear_models(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    models = db.query(RegisteredModel).filter((RegisteredModel.user_id == current_user.id) | (RegisteredModel.user_id.is_(None))).all()
+    count = len(models)
+    for m in models:
+        delete_model_internal(m, db)
+    db.commit()
+    return {"success": True, "message": f"Successfully cleared {count} registered models", "count": count}
 
 # Deployment
 @app.post("/api/v1/models/{model_id}/deploy")
@@ -232,7 +356,8 @@ def deploy_model(model_id: int, req: DeploymentCreate, db: Session = Depends(get
         name=req.name,
         model_id=model_id,
         endpoint=f"/api/v1/predict/{req.name}",
-        status="active"
+        status="active",
+        user_id=current_user.id
     )
     db.add(deployment)
     db.commit()
@@ -243,6 +368,28 @@ def deploy_model(model_id: int, req: DeploymentCreate, db: Session = Depends(get
 @app.get("/api/v1/deployments")
 def get_deployments(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     return db.query(Deployment).all()
+
+@app.delete("/api/v1/deployments/{deployment_id}")
+def delete_deployment(deployment_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    if deployment_id.isdigit():
+        dep = db.query(Deployment).filter(Deployment.id == int(deployment_id)).first()
+    else:
+        dep = db.query(Deployment).filter(Deployment.name == deployment_id).first()
+    if not dep:
+        raise HTTPException(status_code=404, detail="Deployment not found")
+    check_resource_ownership(dep, current_user)
+    delete_deployment_internal(dep, db)
+    db.commit()
+    return {"success": True, "message": f"Deployment {deployment_id} deleted successfully"}
+
+@app.delete("/api/v1/deployments")
+def clear_deployments(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    deployments = db.query(Deployment).filter((Deployment.user_id == current_user.id) | (Deployment.user_id.is_(None))).all()
+    count = len(deployments)
+    for dep in deployments:
+        delete_deployment_internal(dep, db)
+    db.commit()
+    return {"success": True, "message": f"Successfully cleared {count} deployments", "count": count}
 
 from ml_utils import download_dataset
 

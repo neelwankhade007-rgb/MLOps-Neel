@@ -4,6 +4,7 @@ export interface Experiment {
   experiment_name?: string;
   dataset_id?: number;
   algorithm?: string;
+  target_column?: string | null;
   accuracy?: number | null;
   status?: string | null;
   task_type?: string | null;

@@ -51,6 +51,35 @@ def download_dataset(filename):
     df = pd.read_csv(io.BytesIO(obj['Body'].read()))
     return df
 
+def delete_dataset_file(filename: str):
+    try:
+        s3_client.delete_object(Bucket='datasets', Key=filename)
+    except Exception as e:
+        print(f"Failed to delete dataset file {filename} from MinIO: {e}")
+
+def delete_mlflow_run(run_id: str):
+    if not run_id:
+        return
+    mlflow.set_tracking_uri(os.getenv("MLFLOW_TRACKING_URI", "http://localhost:5000"))
+    try:
+        client = mlflow.tracking.MlflowClient()
+        client.delete_run(run_id)
+    except Exception as e:
+        print(f"Failed to delete MLflow run {run_id}: {e}")
+
+    try:
+        paginator = s3_client.get_paginator('list_objects_v2')
+        pages = paginator.paginate(Bucket='mlflow-artifacts')
+        keys_to_delete = []
+        for page in pages:
+            for obj in page.get('Contents', []):
+                if run_id in obj['Key']:
+                    keys_to_delete.append({'Key': obj['Key']})
+        if keys_to_delete:
+            s3_client.delete_objects(Bucket='mlflow-artifacts', Delete={'Objects': keys_to_delete})
+    except Exception as e:
+        print(f"Failed to delete MinIO artifacts for run {run_id}: {e}")
+
 def determine_task_type(y: pd.Series) -> str:
     # If target is non-numeric or boolean, treat as classification
     if not pd.api.types.is_numeric_dtype(y) or pd.api.types.is_bool_dtype(y):
@@ -257,6 +286,7 @@ def train_model(dataset_filename: str, target_column: str, algorithm: str):
             "metrics": metrics_dict,
             "run_id": run.info.run_id,
             "resolved_algorithm": resolved_algorithm,
+            "target_column": target_column,
         }
 
 def load_mlflow_model(run_id: str):

@@ -11,6 +11,16 @@ export const trainingApi = {
     const res = await apiClient.post<TrainingResponse>('/training/jobs', data);
     return res.data;
   },
+
+  deleteExperiment: async (id: number | string): Promise<{ success: boolean; message: string }> => {
+    const res = await apiClient.delete<{ success: boolean; message: string }>(`/experiments/${id}`);
+    return res.data;
+  },
+
+  clearExperiments: async (): Promise<{ success: boolean; message: string; count: number }> => {
+    const res = await apiClient.delete<{ success: boolean; message: string; count: number }>('/experiments');
+    return res.data;
+  },
 };
 
 export default trainingApi;

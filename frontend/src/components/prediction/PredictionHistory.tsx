@@ -1,5 +1,5 @@
 import React from 'react';
-import { CheckCircle2, BrainCircuit } from 'lucide-react';
+import { CheckCircle2, BrainCircuit, Trash2 } from 'lucide-react';
 import Card from '../common/Card';
 import type { PredictionHistoryItem } from '../../types/prediction';
 
@@ -64,16 +64,38 @@ export const PredictionResultCard: React.FC<PredictionResultCardProps> = ({ pred
 
 export interface PredictionHistoryProps {
   history: PredictionHistoryItem[];
+  onClearHistory?: () => void;
 }
 
-export const PredictionHistory: React.FC<PredictionHistoryProps> = ({ history }) => {
+export const PredictionHistory: React.FC<PredictionHistoryProps> = ({
+  history,
+  onClearHistory,
+}) => {
   return (
     <div className="space-y-4">
-      <div>
-        <h2 className="text-xl font-bold text-slate-900">Recent Predictions</h2>
-        <p className="text-sm text-slate-500">
-          Predictions generated during this session.
-        </p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-xl font-bold text-slate-900">Recent Predictions</h2>
+          <p className="text-sm text-slate-500">
+            Predictions generated during this session.
+          </p>
+        </div>
+
+        {onClearHistory && history.length > 0 && (
+          <button
+            type="button"
+            onClick={() => {
+              if (window.confirm('Are you sure you want to clear your prediction history?')) {
+                onClearHistory();
+              }
+            }}
+            className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-red-600 bg-red-50 hover:bg-red-100 rounded-xl border border-red-200 transition-colors"
+            title="Clear prediction history"
+          >
+            <Trash2 size={14} />
+            <span>Clear History</span>
+          </button>
+        )}
       </div>
 
       {history.length > 0 ? (

@@ -36,6 +36,16 @@ export const deploymentApi = {
     );
     return res.data;
   },
+
+  deleteDeployment: async (id: number | string): Promise<{ success: boolean; message: string }> => {
+    const res = await apiClient.delete<{ success: boolean; message: string }>(`/deployments/${id}`);
+    return res.data;
+  },
+
+  clearDeployments: async (): Promise<{ success: boolean; message: string; count: number }> => {
+    const res = await apiClient.delete<{ success: boolean; message: string; count: number }>('/deployments');
+    return res.data;
+  },
 };
 
 export default deploymentApi;

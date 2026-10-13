@@ -16,6 +16,16 @@ export const modelApi = {
     const res = await apiClient.post<{ success: boolean; model: RegisteredModel }>('/models', data);
     return res.data;
   },
+
+  deleteModel: async (id: number | string): Promise<{ success: boolean; message: string }> => {
+    const res = await apiClient.delete<{ success: boolean; message: string }>(`/models/${id}`);
+    return res.data;
+  },
+
+  clearModels: async (): Promise<{ success: boolean; message: string; count: number }> => {
+    const res = await apiClient.delete<{ success: boolean; message: string; count: number }>('/models');
+    return res.data;
+  },
 };
 
 export default modelApi;

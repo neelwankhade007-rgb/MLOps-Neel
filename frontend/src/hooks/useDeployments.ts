@@ -91,6 +91,36 @@ export const useDeployments = () => {
     );
   }).length;
 
+  const deleteDeployment = async (id: number | string): Promise<boolean> => {
+    setLoading(true);
+    try {
+      await deploymentApi.deleteDeployment(id);
+      toast.success('Deployment deleted successfully');
+      setDeployments(prev => prev.filter(d => String(d.id) !== String(id) && d.name !== String(id)));
+      return true;
+    } catch (err: any) {
+      toast.error(err?.response?.data?.detail || 'Failed to delete deployment');
+      return false;
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const clearDeployments = async (): Promise<boolean> => {
+    setLoading(true);
+    try {
+      const res = await deploymentApi.clearDeployments();
+      toast.success(res.message || 'All deployments cleared');
+      setDeployments([]);
+      return true;
+    } catch (err: any) {
+      toast.error(err?.response?.data?.detail || 'Failed to clear deployments');
+      return false;
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return {
     deployments,
     filteredDeployments,
@@ -101,6 +131,8 @@ export const useDeployments = () => {
     activeDeployments,
     pendingDeployments,
     deployModel,
+    deleteDeployment,
+    clearDeployments,
     refreshDeployments: fetchDeployments,
   };
 };

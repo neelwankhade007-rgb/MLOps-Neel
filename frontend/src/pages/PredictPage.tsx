@@ -26,6 +26,7 @@ export const PredictPage: React.FC = () => {
     handleFeatureChange,
     runPrediction,
     refreshDeployments,
+    clearHistory,
   } = usePrediction();
 
   const deploymentStatus = selectedDeployment?.status || 'Active';
@@ -130,7 +131,10 @@ export const PredictPage: React.FC = () => {
       </div>
 
       {/* Prediction History */}
-      <PredictionHistory history={predictionHistory} />
+      <PredictionHistory
+        history={predictionHistory}
+        onClearHistory={clearHistory}
+      />
     </div>
   );
 };

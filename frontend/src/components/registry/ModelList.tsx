@@ -1,5 +1,5 @@
 import React from 'react';
-import { Box, Rocket } from 'lucide-react';
+import { Box, Rocket, Trash2 } from 'lucide-react';
 import Card from '../common/Card';
 import type { RegisteredModel } from '../../types/model';
 import { getStatusStyle, getStatusLabel } from '../../utils/formatters';
@@ -9,6 +9,8 @@ export interface ModelListProps {
   search: string;
   onSearchChange: (value: string) => void;
   onSelectForDeployment: (modelId: string) => void;
+  onDeleteModel?: (id: number) => void;
+  onClearModels?: () => void;
 }
 
 export const ModelList: React.FC<ModelListProps> = ({
@@ -16,6 +18,8 @@ export const ModelList: React.FC<ModelListProps> = ({
   search,
   onSearchChange,
   onSelectForDeployment,
+  onDeleteModel,
+  onClearModels,
 }) => {
   return (
     <div className="space-y-4">
@@ -27,13 +31,30 @@ export const ModelList: React.FC<ModelListProps> = ({
           </p>
         </div>
 
-        <input
-          type="text"
-          value={search}
-          onChange={e => onSearchChange(e.target.value)}
-          placeholder="Search models..."
-          className="w-full md:w-80 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-        />
+        <div className="flex items-center gap-2 w-full md:w-auto">
+          <input
+            type="text"
+            value={search}
+            onChange={e => onSearchChange(e.target.value)}
+            placeholder="Search models..."
+            className="w-full md:w-80 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+          />
+          {onClearModels && models.length > 0 && (
+            <button
+              type="button"
+              onClick={() => {
+                if (window.confirm('Are you sure you want to clear all registered models? This will also remove any active deployments of these models.')) {
+                  onClearModels();
+                }
+              }}
+              className="flex items-center gap-1.5 px-3 py-2.5 text-xs font-medium text-red-600 bg-red-50 hover:bg-red-100 rounded-xl border border-red-200 transition-colors shrink-0"
+              title="Clear all registered models"
+            >
+              <Trash2 size={15} />
+              <span>Clear All</span>
+            </button>
+          )}
+        </div>
       </div>
 
       {models.length > 0 ? (
@@ -51,13 +72,30 @@ export const ModelList: React.FC<ModelListProps> = ({
                     <Box size={22} />
                   </div>
 
-                  <span
-                    className={`text-xs font-medium px-2.5 py-1 rounded-full ${getStatusStyle(
-                      status
-                    )}`}
-                  >
-                    {getStatusLabel(status)}
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={`text-xs font-medium px-2.5 py-1 rounded-full ${getStatusStyle(
+                        status
+                      )}`}
+                    >
+                      {getStatusLabel(status)}
+                    </span>
+                    {onDeleteModel && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (window.confirm(`Are you sure you want to delete registered model "${model.name || `#${model.id}`}"? This will also remove any deployments of this model.`)) {
+                            onDeleteModel(model.id);
+                          }
+                        }}
+                        className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                        title="Delete registered model"
+                      >
+                        <Trash2 size={15} />
+                      </button>
+                    )}
+                  </div>
                 </div>
 
                 <div className="mt-5">

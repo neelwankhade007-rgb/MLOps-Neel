@@ -1,14 +1,15 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Database, ChevronRight } from 'lucide-react';
+import { Database, ChevronRight, Trash2 } from 'lucide-react';
 import Card from '../common/Card';
 import type { Dataset } from '../../types/dataset';
 
 export interface DatasetCardProps {
   dataset: Dataset;
+  onDelete?: (id: number) => void;
 }
 
-export const DatasetCard: React.FC<DatasetCardProps> = ({ dataset }) => {
+export const DatasetCard: React.FC<DatasetCardProps> = ({ dataset, onDelete }) => {
   const navigate = useNavigate();
 
   return (
@@ -17,9 +18,25 @@ export const DatasetCard: React.FC<DatasetCardProps> = ({ dataset }) => {
         <div className="p-3 rounded-xl bg-blue-50 text-blue-600">
           <Database size={22} />
         </div>
-        <span className="text-xs font-medium px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700">
-          Available
-        </span>
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-medium px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700">
+            Available
+          </span>
+          {onDelete && (
+            <button
+              type="button"
+              onClick={() => {
+                if (window.confirm(`Are you sure you want to delete dataset "${dataset.name}"? This will also remove associated experiments and models.`)) {
+                  onDelete(Number(dataset.id));
+                }
+              }}
+              title="Delete dataset"
+              className="p-1.5 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 transition"
+            >
+              <Trash2 size={15} />
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="mt-5">

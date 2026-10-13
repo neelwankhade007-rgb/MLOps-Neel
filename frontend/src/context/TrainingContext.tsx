@@ -35,6 +35,8 @@ export interface TrainingContextType {
   markAllAsRead: () => void;
   dismissNotification: (id: number) => void;
   startTrainingJob: (config: TrainingRequest) => Promise<boolean>;
+  deleteTrainingJob: (id: number | string) => Promise<boolean>;
+  clearTrainingJobs: () => Promise<boolean>;
   refreshTraining: () => Promise<void>;
 }
 
@@ -237,6 +239,36 @@ export const TrainingProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     jobs.filter(j => j.id != null && !readJobIds.includes(j.id) && !dismissedJobIds.includes(j.id)).length +
     (activeJob ? 1 : 0);
 
+  const deleteTrainingJob = async (id: number | string): Promise<boolean> => {
+    setLoading(true);
+    try {
+      await trainingApi.deleteExperiment(id);
+      toast.success('Training job deleted successfully');
+      setJobs(prev => prev.filter(j => String(j.id) !== String(id)));
+      return true;
+    } catch (err: any) {
+      toast.error(err?.response?.data?.detail || 'Failed to delete training job');
+      return false;
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const clearTrainingJobs = async (): Promise<boolean> => {
+    setLoading(true);
+    try {
+      const res = await trainingApi.clearExperiments();
+      toast.success(res.message || 'All training jobs cleared');
+      setJobs([]);
+      return true;
+    } catch (err: any) {
+      toast.error(err?.response?.data?.detail || 'Failed to clear training jobs');
+      return false;
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <TrainingContext.Provider
       value={{
@@ -260,6 +292,8 @@ export const TrainingProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         markAllAsRead,
         dismissNotification,
         startTrainingJob,
+        deleteTrainingJob,
+        clearTrainingJobs,
         refreshTraining: fetchData,
       }}
     >

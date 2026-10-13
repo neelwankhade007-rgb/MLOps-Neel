@@ -19,6 +19,8 @@ export const RegistryPage: React.FC = () => {
     loading: registerLoading,
     registerModel,
     refreshModels,
+    deleteModel,
+    clearModels,
   } = useModels();
 
   const {
@@ -30,6 +32,8 @@ export const RegistryPage: React.FC = () => {
     pendingDeployments,
     deployModel,
     refreshDeployments,
+    deleteDeployment,
+    clearDeployments,
   } = useDeployments();
 
   const [selectedModel, setSelectedModel] = useState('');
@@ -166,6 +170,8 @@ export const RegistryPage: React.FC = () => {
         search={modelSearch}
         onSearchChange={setModelSearch}
         onSelectForDeployment={handleSelectForDeployment}
+        onDeleteModel={deleteModel}
+        onClearModels={clearModels}
       />
 
       {/* Deployment Section */}
@@ -252,6 +258,8 @@ export const RegistryPage: React.FC = () => {
         models={models}
         search={deploymentSearch}
         onSearchChange={setDeploymentSearch}
+        onDeleteDeployment={deleteDeployment}
+        onClearDeployments={clearDeployments}
       />
     </div>
   );

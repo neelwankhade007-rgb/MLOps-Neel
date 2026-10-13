@@ -7,6 +7,7 @@ import {
   Clock,
   HelpCircle,
   ChevronDown,
+  Trash2,
 } from 'lucide-react';
 import Card from '../common/Card';
 import type { TrainingJob } from '../../types/training';
@@ -22,12 +23,14 @@ export interface TrainingJobCardProps {
   job: TrainingJob;
   index: number;
   datasets: Dataset[];
+  onDelete?: (id: number) => void;
 }
 
 export const TrainingJobCard: React.FC<TrainingJobCardProps> = ({
   job,
   index,
   datasets,
+  onDelete,
 }) => {
   const [isExpanded, setIsExpanded] = useState(false);
   const status = job.status;
@@ -153,38 +156,56 @@ export const TrainingJobCard: React.FC<TrainingJobCardProps> = ({
             </div>
           </div>
 
-          {/* Core Properties (Compact Primary Metric) */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-6 gap-y-2 text-sm">
-            <div>
-              <p className="text-xs text-slate-400">Algorithm</p>
-              <p className="font-medium text-slate-700 mt-0.5 truncate max-w-[140px]" title={job.algorithm || undefined}>
-                {job.algorithm || '—'}
-              </p>
+          {/* Core Properties (Compact Primary Metric) and Actions */}
+          <div className="flex items-center justify-between lg:justify-end gap-4">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-6 gap-y-2 text-sm flex-1 lg:flex-initial">
+              <div>
+                <p className="text-xs text-slate-400">Algorithm</p>
+                <p className="font-medium text-slate-700 mt-0.5 truncate max-w-[140px]" title={job.algorithm || undefined}>
+                  {job.algorithm || '—'}
+                </p>
+              </div>
+
+              <div>
+                <p className="text-xs text-slate-400 font-medium">{primaryMetricName}</p>
+                <p className="font-bold text-slate-900 mt-0.5 font-mono text-base">
+                  {primaryMetricDisplay}
+                </p>
+              </div>
+
+              <div>
+                <p className="text-xs text-slate-400">Target</p>
+                <p className="font-medium text-slate-700 mt-0.5 truncate max-w-[120px]" title={job.target_column || undefined}>
+                  {job.target_column || '—'}
+                </p>
+              </div>
+
+              <div>
+                <p className="text-xs text-slate-400">MLflow Run</p>
+                <p
+                  className="font-medium text-slate-700 mt-0.5 font-mono text-xs truncate max-w-[120px]"
+                  title={job.run_id || undefined}
+                >
+                  {job.run_id ? (job.run_id.length > 8 ? `${job.run_id.slice(0, 8)}...` : job.run_id) : '—'}
+                </p>
+              </div>
             </div>
 
-            <div>
-              <p className="text-xs text-slate-400 font-medium">{primaryMetricName}</p>
-              <p className="font-bold text-slate-900 mt-0.5 font-mono text-base">
-                {primaryMetricDisplay}
-              </p>
-            </div>
-
-            <div>
-              <p className="text-xs text-slate-400">Target</p>
-              <p className="font-medium text-slate-700 mt-0.5 truncate max-w-[120px]" title={job.target_column || undefined}>
-                {job.target_column || '—'}
-              </p>
-            </div>
-
-            <div>
-              <p className="text-xs text-slate-400">MLflow Run</p>
-              <p
-                className="font-medium text-slate-700 mt-0.5 font-mono text-xs truncate max-w-[120px]"
-                title={job.run_id || undefined}
+            {onDelete && job.id != null && (
+              <button
+                type="button"
+                onClick={() => {
+                  const id = job.id;
+                  if (id != null && window.confirm(`Are you sure you want to delete training job "${job.name || `#${id}`}"? This will remove the experiment record, MLflow run, and associated artifacts.`)) {
+                    onDelete(id);
+                  }
+                }}
+                title="Delete training job"
+                className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors shrink-0"
               >
-                {job.run_id ? (job.run_id.length > 8 ? `${job.run_id.slice(0, 8)}...` : job.run_id) : '—'}
-              </p>
-            </div>
+                <Trash2 size={16} />
+              </button>
+            )}
           </div>
         </div>
 

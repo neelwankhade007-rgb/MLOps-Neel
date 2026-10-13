@@ -1,5 +1,5 @@
 import React from 'react';
-import { Rocket } from 'lucide-react';
+import { Rocket, Trash2 } from 'lucide-react';
 import Card from '../common/Card';
 import type { Deployment } from '../../types/deployment';
 import type { RegisteredModel } from '../../types/model';
@@ -9,12 +9,14 @@ export interface DeploymentCardProps {
   deployment: Deployment;
   index: number;
   models: RegisteredModel[];
+  onDelete?: (id: number) => void;
 }
 
 export const DeploymentCard: React.FC<DeploymentCardProps> = ({
   deployment,
   index,
   models,
+  onDelete,
 }) => {
   const status = deployment.status || 'Unknown';
   const model = models.find(m => String(m.id) === String(deployment.model_id));
@@ -52,28 +54,46 @@ export const DeploymentCard: React.FC<DeploymentCardProps> = ({
           </div>
         </div>
 
-        {/* Deployment details */}
-        <div className="grid grid-cols-2 md:grid-cols-3 gap-x-8 gap-y-3 text-sm">
-          <div>
-            <p className="text-xs text-slate-400">Deployment ID</p>
-            <p className="font-medium text-slate-700 mt-1">
-              #{deployment.id ?? '—'}
-            </p>
+        {/* Deployment details & Action */}
+        <div className="flex items-center justify-between lg:justify-end gap-6">
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-x-8 gap-y-3 text-sm">
+            <div>
+              <p className="text-xs text-slate-400">Deployment ID</p>
+              <p className="font-medium text-slate-700 mt-1">
+                #{deployment.id ?? '—'}
+              </p>
+            </div>
+
+            <div>
+              <p className="text-xs text-slate-400">Model ID</p>
+              <p className="font-medium text-slate-700 mt-1">
+                {deployment.model_id ? `#${deployment.model_id}` : '—'}
+              </p>
+            </div>
+
+            <div>
+              <p className="text-xs text-slate-400">Status</p>
+              <p className="font-medium text-slate-700 mt-1">
+                {getStatusLabel(status)}
+              </p>
+            </div>
           </div>
 
-          <div>
-            <p className="text-xs text-slate-400">Model ID</p>
-            <p className="font-medium text-slate-700 mt-1">
-              {deployment.model_id ? `#${deployment.model_id}` : '—'}
-            </p>
-          </div>
-
-          <div>
-            <p className="text-xs text-slate-400">Status</p>
-            <p className="font-medium text-slate-700 mt-1">
-              {getStatusLabel(status)}
-            </p>
-          </div>
+          {onDelete && deployment.id != null && (
+            <button
+              type="button"
+              onClick={() => {
+                const id = deployment.id;
+                if (id != null && window.confirm(`Are you sure you want to delete deployment "${deployment.name || `#${id}`}"? This will unload the model from memory and stop serving predictions.`)) {
+                  onDelete(id);
+                }
+              }}
+              title="Delete deployment"
+              className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors shrink-0"
+            >
+              <Trash2 size={16} />
+            </button>
+          )}
         </div>
       </div>
     </Card>

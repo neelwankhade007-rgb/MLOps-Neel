@@ -73,6 +73,36 @@ export const useDatasets = () => {
       ? Math.max(...datasets.map(d => Number(d.id) || 0))
       : 0;
 
+  const deleteDataset = async (id: number | string): Promise<boolean> => {
+    setLoading(true);
+    try {
+      await datasetApi.deleteDataset(id);
+      toast.success('Dataset deleted successfully');
+      setDatasets(prev => prev.filter(d => String(d.id) !== String(id)));
+      return true;
+    } catch (err: any) {
+      toast.error(err?.response?.data?.detail || 'Failed to delete dataset');
+      return false;
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const clearDatasets = async (): Promise<boolean> => {
+    setLoading(true);
+    try {
+      const res = await datasetApi.clearDatasets();
+      toast.success(res.message || 'All datasets cleared');
+      setDatasets([]);
+      return true;
+    } catch (err: any) {
+      toast.error(err?.response?.data?.detail || 'Failed to clear datasets');
+      return false;
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return {
     datasets,
     filteredDatasets,
@@ -82,6 +112,8 @@ export const useDatasets = () => {
     fetching,
     latestId,
     uploadDataset,
+    deleteDataset,
+    clearDatasets,
     refreshDatasets: fetchDatasets,
   };
 };

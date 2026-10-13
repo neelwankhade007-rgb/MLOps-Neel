@@ -20,6 +20,8 @@ export const TrainingPage: React.FC = () => {
     legacyJobs,
     startTrainingJob,
     refreshTraining,
+    deleteTrainingJob,
+    clearTrainingJobs,
   } = useTraining();
 
   return (
@@ -129,6 +131,8 @@ export const TrainingPage: React.FC = () => {
         onSearchChange={setSearch}
         error={error}
         onRetry={refreshTraining}
+        onDeleteJob={deleteTrainingJob}
+        onClearJobs={clearTrainingJobs}
       />
     </div>
   );

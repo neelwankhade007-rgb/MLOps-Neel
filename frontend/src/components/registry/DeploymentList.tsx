@@ -1,5 +1,5 @@
 import React from 'react';
-import { Rocket } from 'lucide-react';
+import { Rocket, Trash2 } from 'lucide-react';
 import Card from '../common/Card';
 import DeploymentCard from './DeploymentCard';
 import type { Deployment } from '../../types/deployment';
@@ -10,6 +10,8 @@ export interface DeploymentListProps {
   models: RegisteredModel[];
   search: string;
   onSearchChange: (value: string) => void;
+  onDeleteDeployment?: (id: number) => void;
+  onClearDeployments?: () => void;
 }
 
 export const DeploymentList: React.FC<DeploymentListProps> = ({
@@ -17,6 +19,8 @@ export const DeploymentList: React.FC<DeploymentListProps> = ({
   models,
   search,
   onSearchChange,
+  onDeleteDeployment,
+  onClearDeployments,
 }) => {
   return (
     <div className="space-y-4">
@@ -28,13 +32,30 @@ export const DeploymentList: React.FC<DeploymentListProps> = ({
           </p>
         </div>
 
-        <input
-          type="text"
-          value={search}
-          onChange={e => onSearchChange(e.target.value)}
-          placeholder="Search deployments..."
-          className="w-full md:w-80 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-        />
+        <div className="flex items-center gap-2 w-full md:w-auto">
+          <input
+            type="text"
+            value={search}
+            onChange={e => onSearchChange(e.target.value)}
+            placeholder="Search deployments..."
+            className="w-full md:w-80 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+          />
+          {onClearDeployments && deployments.length > 0 && (
+            <button
+              type="button"
+              onClick={() => {
+                if (window.confirm('Are you sure you want to clear all deployments? This will unload all models and stop serving predictions.')) {
+                  onClearDeployments();
+                }
+              }}
+              className="flex items-center gap-1.5 px-3 py-2.5 text-xs font-medium text-red-600 bg-red-50 hover:bg-red-100 rounded-xl border border-red-200 transition-colors shrink-0"
+              title="Clear all deployments"
+            >
+              <Trash2 size={15} />
+              <span>Clear All</span>
+            </button>
+          )}
+        </div>
       </div>
 
       {deployments.length > 0 ? (
@@ -45,6 +66,7 @@ export const DeploymentList: React.FC<DeploymentListProps> = ({
               deployment={deployment}
               index={index}
               models={models}
+              onDelete={onDeleteDeployment}
             />
           ))}
         </div>

@@ -336,6 +336,10 @@ export const usePrediction = () => {
     featureNames: getFeatureNames(),
     handleFeatureChange,
     runPrediction,
+    clearHistory: () => {
+      setPredictionHistory([]);
+      toast.success('Prediction history cleared');
+    },
     refreshDeployments: loadDeployments,
   };
 };

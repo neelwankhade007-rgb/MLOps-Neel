@@ -71,6 +71,36 @@ export const useModels = () => {
     );
   });
 
+  const deleteModel = async (id: number | string): Promise<boolean> => {
+    setLoading(true);
+    try {
+      await modelApi.deleteModel(id);
+      toast.success('Model deleted successfully');
+      setModels(prev => prev.filter(m => String(m.id) !== String(id)));
+      return true;
+    } catch (err: any) {
+      toast.error(err?.response?.data?.detail || 'Failed to delete model');
+      return false;
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const clearModels = async (): Promise<boolean> => {
+    setLoading(true);
+    try {
+      const res = await modelApi.clearModels();
+      toast.success(res.message || 'All registered models cleared');
+      setModels([]);
+      return true;
+    } catch (err: any) {
+      toast.error(err?.response?.data?.detail || 'Failed to clear models');
+      return false;
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return {
     experiments,
     models,
@@ -80,6 +110,8 @@ export const useModels = () => {
     loading,
     fetching,
     registerModel,
+    deleteModel,
+    clearModels,
     refreshModels: fetchData,
   };
 };

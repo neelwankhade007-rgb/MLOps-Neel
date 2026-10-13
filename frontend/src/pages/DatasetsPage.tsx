@@ -14,6 +14,8 @@ export const DatasetsPage: React.FC = () => {
     loading,
     latestId,
     uploadDataset,
+    deleteDataset,
+    clearDatasets,
   } = useDatasets();
 
   return (
@@ -100,6 +102,8 @@ export const DatasetsPage: React.FC = () => {
         datasets={filteredDatasets}
         search={search}
         onSearchChange={setSearch}
+        onDeleteDataset={deleteDataset}
+        onClearDatasets={clearDatasets}
       />
     </div>
   );
