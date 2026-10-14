@@ -31,8 +31,8 @@ class TelemetryAggregator:
         self.history_distribution = deque(maxlen=30)
         self.history_throughput = deque(maxlen=30)
         self.recent_events = deque(maxlen=40)
-        self.last_sample_time = time.time()
-        self.last_request_count = 0
+        self.last_sample_time: Optional[float] = None
+        self.last_request_count: Optional[int] = None
 
     def _get_k8s_client_headers(self) -> Optional[Dict[str, str]]:
         if os.path.exists(K8S_TOKEN_PATH):
@@ -344,11 +344,26 @@ class TelemetryAggregator:
 
         # Calculate throughput (req/s) from requests delta over actual elapsed time
         now = time.time()
-        time_delta = max(0.5, now - self.last_sample_time)
-        req_delta = max(0, total_requests - self.last_request_count)
-        throughput_rps = round(req_delta / time_delta, 1) if req_delta > 0 else 0.0
-        self.last_sample_time = now
-        self.last_request_count = total_requests
+        has_reachable_replicas = any(r.get("reachable", False) for r in processed_replicas)
+
+        if self.last_sample_time is None or self.last_request_count is None:
+            # Baseline initialization on first sample: establish count baseline without false spike
+            time_delta = 5.0
+            throughput_rps = 0.0
+            if has_reachable_replicas:
+                self.last_sample_time = now
+                self.last_request_count = total_requests
+        elif not has_reachable_replicas:
+            # If replicas are temporarily unreachable, settle to 0.0 without corrupting baseline count
+            time_delta = max(0.5, now - self.last_sample_time)
+            throughput_rps = 0.0
+            self.last_sample_time = now
+        else:
+            time_delta = max(0.5, now - self.last_sample_time)
+            req_delta = max(0, total_requests - self.last_request_count)
+            throughput_rps = round(req_delta / time_delta, 1) if req_delta > 0 else 0.0
+            self.last_sample_time = now
+            self.last_request_count = total_requests
 
         # Aggregate summary numbers
         valid_p95 = [v for v in p95_values if v > 0]
