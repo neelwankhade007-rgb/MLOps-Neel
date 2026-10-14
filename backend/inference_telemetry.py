@@ -249,12 +249,20 @@ class TelemetryAggregator:
             if avg_lat > 0:
                 latencies_for_avg.append(avg_lat)
 
-            # Match with Metrics Server pod usage
-            pod_metric = pod_metrics.get(rep_id, {})
-            cpu_pct = pod_metric.get("cpu_pct", 35.0 if is_ready else 0.0)
-            mem_pct = pod_metric.get("mem_pct", 42.0 if is_ready else 0.0)
-            cpu_raw = pod_metric.get("raw_cpu", "2m")
-            mem_raw = pod_metric.get("raw_mem", "210Mi")
+            # Match with Metrics Server pod usage - NO FAKE FALLBACKS
+            pod_metric = pod_metrics.get(rep_id)
+            if pod_metric:
+                cpu_pct = pod_metric.get("cpu_pct", 0.0)
+                mem_pct = pod_metric.get("mem_pct", 0.0)
+                cpu_raw = pod_metric.get("raw_cpu", "0m")
+                mem_raw = pod_metric.get("raw_mem", "0Mi")
+                metrics_available = True
+            else:
+                cpu_pct = None
+                mem_pct = None
+                cpu_raw = "N/A"
+                mem_raw = "N/A"
+                metrics_available = False
 
             err_rate = (req_error / req_served * 100.0) if req_served > 0 else 0.0
 
@@ -281,15 +289,17 @@ class TelemetryAggregator:
                 "error_rate_pct": round(err_rate, 2),
                 "active_requests": active_req,
                 "avg_latency_ms": round(avg_lat, 2),
-                "p50_latency_ms": round(p50, 2),
-                "p95_latency_ms": round(p95, 2),
-                "p99_latency_ms": round(p99, 2),
+                "p50_latency_ms": round(p50, 2) if req_served >= 3 else round(avg_lat, 2),
+                "p95_latency_ms": round(p95, 2) if req_served >= 5 else None,
+                "p99_latency_ms": round(p99, 2) if req_served >= 10 else None,
+                "sample_count": req_served,
                 "cpu_pct": cpu_pct,
                 "mem_pct": mem_pct,
                 "cpu_raw": cpu_raw,
                 "mem_raw": mem_raw,
+                "metrics_available": metrics_available,
                 "traffic_share_pct": 0.0, # calculated below
-                "score": 0.0, # calculated below
+                "score": 0.0, # calculated below (benchmark preview)
                 "is_optimal": False
             })
 
@@ -302,9 +312,10 @@ class TelemetryAggregator:
             for r in processed_replicas:
                 r["traffic_share_pct"] = share
 
-        # Compute normalized penalty score: S_i = w_lat * L_norm + w_req * R_norm + w_cpu * C_norm + w_err * E_norm
-        # Normalize across current replicas
-        max_lat = max([r["p95_latency_ms"] for r in processed_replicas] or [1.0]) or 100.0
+        # Compute normalized penalty score (Benchmark Preview):
+        # S_i = w_lat * L_norm + w_req * R_norm + w_cpu * C_norm + w_err * E_norm
+        valid_lats = [r["avg_latency_ms"] for r in processed_replicas if r["avg_latency_ms"] > 0]
+        max_lat = max(valid_lats or [1.0])
         max_req = max([r["active_requests"] for r in processed_replicas] or [1.0]) or 10.0
         max_cpu = 100.0
         max_err = max([r["error_rate_pct"] for r in processed_replicas] or [1.0]) or 5.0
@@ -315,9 +326,11 @@ class TelemetryAggregator:
             if not r["is_ready"]:
                 score = 1.000
             else:
-                l_norm = min(1.0, r["p95_latency_ms"] / max(1.0, max_lat))
+                lat_val = r["avg_latency_ms"]
+                l_norm = min(1.0, lat_val / max(1.0, max_lat))
                 r_norm = min(1.0, r["active_requests"] / max(1.0, max_req))
-                c_norm = min(1.0, r["cpu_pct"] / max_cpu)
+                cpu_val = r["cpu_pct"] if r["cpu_pct"] is not None else 0.0
+                c_norm = min(1.0, cpu_val / max_cpu)
                 e_norm = min(1.0, r["error_rate_pct"] / max_err)
                 score = round(w_lat * l_norm + w_req * r_norm + w_cpu * c_norm + w_err * e_norm, 3)
 
@@ -329,21 +342,24 @@ class TelemetryAggregator:
         if processed_replicas:
             processed_replicas[optimal_idx]["is_optimal"] = True
 
-        # Calculate throughput (req/s) from requests delta
+        # Calculate throughput (req/s) from requests delta over actual elapsed time
         now = time.time()
         time_delta = max(0.5, now - self.last_sample_time)
         req_delta = max(0, total_requests - self.last_request_count)
-        throughput_rps = round(req_delta / time_delta, 1)
+        throughput_rps = round(req_delta / time_delta, 1) if req_delta > 0 else 0.0
         self.last_sample_time = now
         self.last_request_count = total_requests
 
         # Aggregate summary numbers
-        overall_p95 = round(max(p95_values), 1) if p95_values else 0.0
-        overall_p50 = round(sum(p50_values) / len(p50_values), 1) if p50_values else 0.0
-        overall_p99 = round(max(p99_values), 1) if p99_values else 0.0
+        valid_p95 = [v for v in p95_values if v > 0]
+        overall_p95 = round(max(valid_p95), 1) if (valid_p95 and total_requests >= 5) else None
+        valid_p50 = [v for v in p50_values if v > 0]
+        overall_p50 = round(sum(valid_p50) / len(valid_p50), 1) if (valid_p50 and total_requests >= 3) else None
+        valid_p99 = [v for v in p99_values if v > 0]
+        overall_p99 = round(max(valid_p99), 1) if (valid_p99 and total_requests >= 10) else None
         overall_err_rate = round((total_errors / total_requests * 100.0), 2) if total_requests > 0 else 0.0
 
-        # Sort recent requests
+        # Sort recent requests by authentic timestamp
         all_recent_requests.sort(key=lambda x: str(x.get("timestamp", "")), reverse=True)
         recent_log = []
         for ev in all_recent_requests[:25]:
@@ -354,8 +370,7 @@ class TelemetryAggregator:
                 "request_id": ev.get("id", f"#req-{uuid.uuid4().hex[:6]}"),
                 "assigned_pod": rep_name,
                 "replica_id": ev.get("replica_id"),
-                "calculated_score": matched_rep["score"] if matched_rep else 0.35,
-                "decision_rationale": "Dispatched via K8s Service iptables round-robin (ClusterIP: 10.109.6.204)",
+                "routing_mechanism": "Native K8s Service (L4 iptables)",
                 "observed_latency_ms": ev.get("latency_ms", 0.0),
                 "http_status": ev.get("status_text", "200 OK")
             })
@@ -364,9 +379,9 @@ class TelemetryAggregator:
         current_time_str = datetime.utcnow().strftime("%H:%M:%S")
         self.history_latency.append({
             "timestamp": current_time_str,
-            "p50": overall_p50,
-            "p95": overall_p95,
-            "p99": overall_p99
+            "p50": overall_p50 or (latencies_for_avg[0] if latencies_for_avg else 0.0),
+            "p95": overall_p95 or 0.0,
+            "p99": overall_p99 or 0.0
         })
 
         dist_point = {"timestamp": current_time_str}
@@ -384,6 +399,7 @@ class TelemetryAggregator:
         return {
             "summary": {
                 "throughput_rps": throughput_rps,
+                "throughput_window_s": round(time_delta, 1),
                 "p95_latency_ms": overall_p95,
                 "p50_latency_ms": overall_p50,
                 "p99_latency_ms": overall_p99,
@@ -394,7 +410,8 @@ class TelemetryAggregator:
                 "total_success": total_success,
                 "total_errors": total_errors,
                 "active_requests": total_active,
-                "gateway_decision_ms": 3.8,
+                "gateway_decision_ms": None, # Native K8s has no user-space gateway decision
+                "gateway_decision_desc": "N/A (In-kernel L4 iptables routing, <0.1ms overhead)",
                 "active_policy": "Native Kubernetes Service",
                 "active_policy_desc": "L4 iptables round-robin without worker queue awareness",
                 "model_name": "titanic-classifier:b0ca6d39",
