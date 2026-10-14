@@ -1,0 +1,21 @@
+# Shared runtime & lightweight testing/benchmarking dependencies
+# Used across backend, gateway, benchmarks, and repo test scripts.
+fastapi
+uvicorn
+pydantic
+httpx
+pytest
+locust
+requests
+
+# Backend web API / DB / Auth runtime (lightweight)
+sqlalchemy
+psycopg2-binary
+psycopg[binary]
+python-multipart
+python-jose[cryptography]
+passlib
+bcrypt==3.2.0
+
+# Optional / Heavyweight dependencies (MLflow, Scikit-learn, XGBoost, Pandas, Boto3)
+# can be installed via: pip install -r requirements-ml.txt

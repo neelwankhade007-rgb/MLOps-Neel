@@ -1,0 +1,6 @@
+# Optional / Heavyweight ML dependencies for local training and MLflow integration
+boto3
+mlflow==2.10.2
+scikit-learn
+xgboost
+pandas

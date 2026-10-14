@@ -14,7 +14,14 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+.venv/
 .venv
+
+# Testing & Coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
 
 # Node.js / Frontend
 frontend/node_modules/
@@ -26,11 +33,21 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
-# MLflow & Local ML Artifacts
+# MLflow & Local ML Artifacts / Serialized Models
 mlruns/
 mlartifacts/
 *.db
 *.sqlite3
+*.pkl
+*.pickle
+*.joblib
+*.onnx
+
+# Benchmarks & Load Testing
+locust.log
+benchmarks/reports/
+benchmarks/*.csv
+benchmarks/*.html
 
 # IDE / Editor specific
 .vscode/
@@ -58,4 +75,5 @@ test_housing.csv
 # Audit and diagnostic reports
 *audit*.md
 IMPLEMENTATION_REPORT.md
+
 
