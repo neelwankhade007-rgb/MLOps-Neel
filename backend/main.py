@@ -416,80 +416,82 @@ def get_deployment_schema(deployment_name: str, db: Session = Depends(get_db)):
     except Exception:
         raise HTTPException(status_code=404, detail="Schema not found for this deployment.")
 
-# Prediction
+# Prediction – forward through the inference gateway (round-robin)
+import os as _os
+import urllib.error as _urllib_error
+
+GATEWAY_URL = _os.environ.get("GATEWAY_URL", "http://inference-gateway:8080")
+INFERENCE_RUN_ID = _os.environ.get("INFERENCE_RUN_ID", "b0ca6d39e884422fa6fdb3471a2c1349")
+
+
 @app.post("/api/v1/predict/{deployment_name}")
-def predict(deployment_name: str, req: PredictionRequest, db: Session = Depends(get_db)):
+def predict(
+    deployment_name: str,
+    req: PredictionRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     dep = db.query(Deployment).filter(Deployment.name == deployment_name).first()
     if not dep:
         raise HTTPException(status_code=404, detail="Deployment not found")
+    if dep.user_id is not None and dep.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized to access this deployment")
+
     model_record = db.query(RegisteredModel).filter(RegisteredModel.id == dep.model_id).first()
     if not model_record:
         raise HTTPException(status_code=404, detail="Model record not found")
     exp = db.query(Experiment).filter(Experiment.id == model_record.experiment_id).first()
     if not exp or not exp.run_id:
         raise HTTPException(status_code=404, detail="Experiment run not found")
-        
-    if deployment_name not in deployed_models:
+
+    # Reject deployments linked to an incompatible model run
+    if exp.run_id != INFERENCE_RUN_ID:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Deployment '{deployment_name}' requires model run '{exp.run_id}', "
+                f"but inference replicas are serving '{INFERENCE_RUN_ID}'. "
+                f"Routing to mismatched model run is rejected."
+            ),
+        )
+
+    # Forward prediction to the inference gateway
+    payload = json.dumps({"features": req.features}).encode("utf-8")
+    gateway_predict_url = f"{GATEWAY_URL}/predict"
+
+    try:
+        gw_req = urllib.request.Request(
+            gateway_predict_url,
+            data=payload,
+            headers={
+                "Content-Type": "application/json",
+                "X-Model-Run-ID": exp.run_id,
+            },
+        )
+        with urllib.request.urlopen(gw_req, timeout=15.0) as resp:
+            gw_body = json.loads(resp.read().decode())
+    except _urllib_error.HTTPError as he:
+        # Propagate upstream HTTP errors faithfully
         try:
-            deployed_models[deployment_name] = load_mlflow_model(exp.run_id)
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Failed to load model: {str(e)}")
+            detail = json.loads(he.read().decode()).get("detail", str(he))
+        except Exception:
+            detail = str(he)
+        raise HTTPException(status_code=he.code, detail=detail)
+    except _urllib_error.URLError as ue:
+        raise HTTPException(status_code=502, detail=f"Gateway unreachable: {ue.reason}")
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Gateway request failed: {exc}")
 
-    import mlflow
-    try:
-        explicit_schema = mlflow.artifacts.load_dict(f"runs:/{exp.run_id}/explicit_schema.json")
-    except Exception:
-        raise HTTPException(status_code=404, detail="Schema not found for deployment.")
-
-    features_schema = explicit_schema.get("features", [])
-    
-    # Input validation
-    for feature in features_schema:
-        fname = feature["name"]
-        if feature.get("required", False) and fname not in req.features:
-            raise HTTPException(status_code=400, detail=f"Missing required feature: {fname}")
-        if fname in req.features:
-            val = req.features[fname]
-            if feature["type"] == "number" and not isinstance(val, (int, float)):
-                try:
-                    req.features[fname] = float(val)
-                except ValueError:
-                    raise HTTPException(status_code=400, detail=f"Invalid numeric value for {fname}")
-            elif feature["type"] == "categorical" and feature.get("options") and val not in feature["options"]:
-                raise HTTPException(status_code=400, detail=f"Unknown categorical value for {fname}: {val}. Allowed: {feature['options']}")
-
-    model = deployed_models[deployment_name]
-    df = pd.DataFrame([req.features])
-    
-    df_dummies = pd.get_dummies(df)
-    
-    expected_features = explicit_schema.get("encoded_columns", [])
-    if expected_features:
-        df_dummies = df_dummies.reindex(columns=expected_features, fill_value=0)
-    else:
-        # Fallback for old models
-        if hasattr(model, '_model_impl') and hasattr(model._model_impl, 'sklearn_model'):
-            expected_features = model._model_impl.sklearn_model.feature_names_in_
-            df_dummies = df_dummies.reindex(columns=expected_features, fill_value=0)
-        elif hasattr(model, '_model_impl') and hasattr(model._model_impl, 'xgb_model'):
-            expected_features = model._model_impl.xgb_model.feature_names
-            df_dummies = df_dummies.reindex(columns=expected_features, fill_value=0)
-            
-    try:
-        prediction = model.predict(df_dummies)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Prediction failed: {str(e)}")
-    
-    raw_pred = prediction[0].item() if hasattr(prediction[0], 'item') else prediction[0]
-    classes = explicit_schema.get("classes")
-    if classes and isinstance(raw_pred, (int, float)) and int(raw_pred) < len(classes):
-        pred_output = str(classes[int(raw_pred)])
-    else:
-        pred_output = str(raw_pred)
+    # Separate routing metadata from model output, preserving all replica response attributes
+    gateway_meta = gw_body.pop("gateway_meta", None)
 
     return {
-        "prediction": pred_output,
-        "deployment": deployment_name
+        "prediction": gw_body.get("prediction"),
+        "deployment": deployment_name,
+        "replica_id": gw_body.get("replica_id"),
+        "request_id": gw_body.get("request_id"),
+        "latency_ms": gw_body.get("latency_ms"),
+        "gateway_meta": gateway_meta,
     }
 
 # ==============================================================================

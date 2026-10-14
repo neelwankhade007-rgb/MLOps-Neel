@@ -180,6 +180,41 @@ class TelemetryAggregator:
                 "error": str(e)
             }
 
+    def get_gateway_runtime_status(self) -> Dict[str, Any]:
+        """Query gateway /ready to determine actual active routing mechanism from runtime evidence."""
+        gateway_host = os.environ.get("GATEWAY_URL", "http://inference-gateway:8080")
+        url = f"{gateway_host}/ready"
+        t0 = time.perf_counter()
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "Nexus-Telemetry-Aggregator"})
+            with urllib.request.urlopen(req, timeout=1.2) as resp:
+                elapsed_ms = (time.perf_counter() - t0) * 1000.0
+                if resp.status == 200:
+                    data = json.loads(resp.read().decode())
+                    if data.get("status") == "ready":
+                        return {
+                            "is_active": True,
+                            "strategy": "Round Robin",
+                            "strategy_desc": f"Custom L7 Gateway (Round Robin across {data.get('available_replicas', 3)} ready replicas)",
+                            "gateway_url": gateway_host,
+                            "decision_ms": round(elapsed_ms, 2),
+                            "decision_desc": f"L7 User-Space Reverse Proxy (~{round(elapsed_ms, 1)}ms gateway overhead)",
+                            "model_run_id": data.get("model_run_id"),
+                            "available_replicas": data.get("available_replicas", 3)
+                        }
+        except Exception:
+            pass
+        return {
+            "is_active": False,
+            "strategy": "Native Kubernetes Service",
+            "strategy_desc": "L4 iptables round-robin without worker queue awareness",
+            "gateway_url": None,
+            "decision_ms": None,
+            "decision_desc": "N/A (In-kernel L4 iptables routing, <0.1ms overhead)",
+            "model_run_id": None,
+            "available_replicas": 0
+        }
+
     def get_telemetry_snapshot(self, weights: Optional[Dict[str, float]] = None) -> Dict[str, Any]:
         """Produce full live telemetry matching the Stitch dashboard specification."""
         if weights is None:
@@ -193,6 +228,8 @@ class TelemetryAggregator:
         # 1. Discover pods and fetch stats concurrently
         replica_ips = self.discover_replicas()
         pod_metrics = self.get_pod_metrics()
+        gw_status = self.get_gateway_runtime_status()
+        is_gw = gw_status["is_active"]
 
         with ThreadPoolExecutor(max_workers=max(3, len(replica_ips))) as executor:
             raw_stats = list(executor.map(self.fetch_replica_stats, replica_ips))
@@ -377,6 +414,7 @@ class TelemetryAggregator:
         # Sort recent requests by authentic timestamp
         all_recent_requests.sort(key=lambda x: str(x.get("timestamp", "")), reverse=True)
         recent_log = []
+        routing_label = "Custom Gateway (Round Robin)" if is_gw else "Native K8s Service (L4 iptables)"
         for ev in all_recent_requests[:25]:
             matched_rep = next((r for r in processed_replicas if r["replica_id"] == ev.get("replica_id")), None)
             rep_name = matched_rep["name"] if matched_rep else ev.get("replica_id", "inference-node")
@@ -385,7 +423,7 @@ class TelemetryAggregator:
                 "request_id": ev.get("id", f"#req-{uuid.uuid4().hex[:6]}"),
                 "assigned_pod": rep_name,
                 "replica_id": ev.get("replica_id"),
-                "routing_mechanism": "Native K8s Service (L4 iptables)",
+                "routing_mechanism": ev.get("routing_strategy", routing_label),
                 "observed_latency_ms": ev.get("latency_ms", 0.0),
                 "http_status": ev.get("status_text", "200 OK")
             })
@@ -425,10 +463,12 @@ class TelemetryAggregator:
                 "total_success": total_success,
                 "total_errors": total_errors,
                 "active_requests": total_active,
-                "gateway_decision_ms": None, # Native K8s has no user-space gateway decision
-                "gateway_decision_desc": "N/A (In-kernel L4 iptables routing, <0.1ms overhead)",
-                "active_policy": "Native Kubernetes Service",
-                "active_policy_desc": "L4 iptables round-robin without worker queue awareness",
+                "gateway_decision_ms": gw_status["decision_ms"],
+                "gateway_decision_desc": gw_status["decision_desc"],
+                "active_policy": gw_status["strategy"],
+                "active_policy_desc": gw_status["strategy_desc"],
+                "gateway_active": is_gw,
+                "gateway_url": gw_status["gateway_url"],
                 "model_name": "titanic-classifier:b0ca6d39",
                 "namespace": "mlops",
                 "cluster_name": "Minikube Local Cluster (v1.37)",
@@ -444,10 +484,12 @@ class TelemetryAggregator:
         }
 
     def send_test_traffic(self, count: int = 1) -> List[Dict[str, Any]]:
-        """Send actual prediction requests through native Kubernetes Service ClusterIP."""
+        """Send actual prediction requests through inference gateway (with ClusterIP fallback)."""
         count = max(1, min(20, count))
         results = []
-        url = f"http://{CLUSTERIP_HOST}:8000/predict"
+        gateway_host = os.environ.get("GATEWAY_URL", "http://inference-gateway:8080")
+        primary_url = f"{gateway_host}/predict" if not gateway_host.endswith("/predict") else gateway_host
+        fallback_url = f"http://{CLUSTERIP_HOST}:8000/predict"
 
         # Titanic sample payload
         sample_payload = {
@@ -468,21 +510,35 @@ class TelemetryAggregator:
 
         for _ in range(count):
             t0 = time.perf_counter()
+            used_url = primary_url
             try:
                 req = urllib.request.Request(
-                    url,
+                    primary_url,
                     data=data_bytes,
                     headers={"Content-Type": "application/json"}
                 )
-                with urllib.request.urlopen(req, timeout=3.0) as resp:
+                try:
+                    resp_ctx = urllib.request.urlopen(req, timeout=3.0)
+                except urllib.error.URLError:
+                    # Fallback to ClusterIP if gateway not reachable
+                    used_url = fallback_url
+                    req_fb = urllib.request.Request(
+                        fallback_url,
+                        data=data_bytes,
+                        headers={"Content-Type": "application/json"}
+                    )
+                    resp_ctx = urllib.request.urlopen(req_fb, timeout=3.0)
+
+                with resp_ctx as resp:
                     elapsed = (time.perf_counter() - t0) * 1000.0
                     body = json.loads(resp.read().decode())
                     results.append({
                         "request_id": body.get("request_id", f"req-{uuid.uuid4().hex[:6]}"),
-                        "replica_id": body.get("replica_id", "unknown"),
+                        "replica_id": body.get("replica_id", body.get("gateway_meta", {}).get("selected_replica", "unknown")),
                         "prediction": body.get("prediction", "1"),
                         "latency_ms": body.get("latency_ms", round(elapsed, 2)),
                         "roundtrip_ms": round(elapsed, 2),
+                        "routing_strategy": body.get("gateway_meta", {}).get("routing_strategy", "native_clusterip"),
                         "status": 200,
                         "status_text": "200 OK",
                         "timestamp": datetime.utcnow().strftime("%H:%M:%S.%f")[:-3]

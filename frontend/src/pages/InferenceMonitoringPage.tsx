@@ -202,11 +202,18 @@ export const InferenceMonitoringPage: React.FC = () => {
     gateway_decision_desc: 'N/A (In-kernel L4 iptables routing, <0.1ms overhead)',
     active_policy: 'Native Kubernetes Service',
     active_policy_desc: 'L4 iptables round-robin without worker queue awareness',
+    gateway_active: false,
+    gateway_url: null,
     model_name: 'titanic-classifier:b0ca6d39',
     namespace: 'mlops',
     cluster_name: 'Minikube Local Cluster (v1.37)',
     last_sync_utc: lastUpdated
   };
+
+  const isGatewayActive = Boolean(
+    summary.gateway_active ||
+    (summary.active_policy && summary.active_policy.toLowerCase().includes('round robin'))
+  );
 
   const replicas: ReplicaTelemetry[] = telemetry?.replicas || [];
   const recentEvents: RecentEvent[] = telemetry?.recent_events || [];
@@ -402,16 +409,24 @@ export const InferenceMonitoringPage: React.FC = () => {
 
             <div className="hidden xl:flex items-center gap-1.5">
               <span className="font-semibold text-slate-900">Active Policy:</span>
-              <span className="px-2 py-0.5 rounded bg-blue-50 text-blue-700 font-mono text-[11px] font-semibold border border-blue-200">
+              <span className={`px-2 py-0.5 rounded font-mono text-[11px] font-semibold border ${
+                isGatewayActive
+                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                  : 'bg-blue-50 text-blue-700 border-blue-200'
+              }`}>
                 {summary.active_policy}
               </span>
             </div>
           </div>
 
           <div className="flex items-center gap-2">
-            <span className="px-2.5 py-1 rounded bg-slate-100 text-slate-700 font-mono text-[11px] font-medium flex items-center gap-1.5 border border-slate-200">
-              <ShieldCheck size={13} className="text-blue-600" />
-              Routing: Native K8s IPTables / IPVS
+            <span className={`px-2.5 py-1 rounded font-mono text-[11px] font-medium flex items-center gap-1.5 border ${
+              isGatewayActive
+                ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                : 'bg-slate-100 text-slate-700 border-slate-200'
+            }`}>
+              <ShieldCheck size={13} className={isGatewayActive ? "text-emerald-600" : "text-blue-600"} />
+              Routing: {isGatewayActive ? 'Custom Gateway (L7 Round Robin)' : 'Native K8s IPTables / IPVS'}
             </span>
           </div>
         </div>
@@ -582,7 +597,7 @@ export const InferenceMonitoringPage: React.FC = () => {
             </div>
           </div>
 
-          {/* KPI 5: Gateway Dispatch Overhead - HONEST L4 KERNEL REPRESENTATION */}
+          {/* KPI 5: Gateway Dispatch Overhead */}
           <div className="p-4 rounded-xl bg-white border border-slate-200 shadow-xs flex flex-col justify-between">
             <div className="flex items-center justify-between text-slate-500">
               <span className="text-[11px] font-bold uppercase tracking-wider">GATEWAY DISPATCH</span>
@@ -591,20 +606,30 @@ export const InferenceMonitoringPage: React.FC = () => {
             <div className="my-2">
               <div className="flex items-baseline gap-1.5">
                 <span className="text-3xl font-semibold tracking-tight text-slate-900 font-mono">
-                  {summary.gateway_decision_ms != null ? `${summary.gateway_decision_ms} ms` : 'N/A'}
+                  {summary.gateway_decision_ms != null ? `${summary.gateway_decision_ms} ms` : (isGatewayActive ? '<1 ms' : 'N/A')}
                 </span>
-                <span className="text-xs text-slate-500 font-mono">L4 iptables</span>
+                <span className="text-xs text-slate-500 font-mono">
+                  {isGatewayActive ? 'L7 Gateway' : 'L4 iptables'}
+                </span>
               </div>
               <div className="flex items-center gap-1 mt-1 text-xs text-slate-500">
-                <span className="text-emerald-600 font-semibold">Zero-Hop Gateway</span>
+                <span className={isGatewayActive ? "text-emerald-600 font-semibold" : "text-blue-600 font-semibold"}>
+                  {isGatewayActive ? 'Round Robin Proxy' : 'Zero-Hop Gateway'}
+                </span>
                 <span>·</span>
-                <span className="font-mono text-[10px]">&lt;0.1ms overhead</span>
+                <span className="font-mono text-[10px]">
+                  {summary.gateway_decision_desc || (isGatewayActive ? 'Round Robin Dispatch' : '<0.1ms overhead')}
+                </span>
               </div>
             </div>
-            {/* Honest Kernel Routing Status Badge */}
+            {/* Routing Status Badge */}
             <div className="w-full h-7 pt-1 flex items-center">
-              <div className="w-full py-1 px-2 rounded bg-slate-100 border border-slate-200 text-center text-[9px] font-mono text-slate-600 font-semibold truncate">
-                KERNEL L4 NETWORKING • WIRE-SPEED
+              <div className={`w-full py-1 px-2 rounded border text-center text-[9px] font-mono font-semibold truncate ${
+                isGatewayActive
+                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                  : 'bg-slate-100 text-slate-600 border-slate-200'
+              }`}>
+                {isGatewayActive ? 'USER-SPACE L7 GATEWAY • ROUND ROBIN' : 'KERNEL L4 NETWORKING • WIRE-SPEED'}
               </div>
             </div>
           </div>
@@ -684,7 +709,9 @@ export const InferenceMonitoringPage: React.FC = () => {
                     </div>
                     <div className="flex justify-between items-center p-2 rounded bg-slate-50 border border-slate-100">
                       <span className="text-slate-500">Target Service</span>
-                      <span className="font-semibold text-slate-900">inference-service:8000</span>
+                      <span className="font-semibold text-slate-900 font-mono">
+                        {isGatewayActive ? 'inference-gateway:8080' : 'inference-service:8000'}
+                      </span>
                     </div>
                   </div>
                 </div>
@@ -694,11 +721,11 @@ export const InferenceMonitoringPage: React.FC = () => {
               <div className="col-span-1 flex flex-col items-center justify-center">
                 <div className="flex flex-col items-center gap-1 text-center">
                   <span className={`font-mono text-[11px] font-semibold ${
-                    hasActiveTraffic ? 'text-blue-600 animate-pulse' : 'text-slate-400'
+                    hasActiveTraffic ? (isGatewayActive ? 'text-emerald-600 animate-pulse' : 'text-blue-600 animate-pulse') : 'text-slate-400'
                   }`}>
                     {hasActiveTraffic ? `${summary.throughput_rps} rps` : 'idle'}
                   </span>
-                  <div className={`w-full flex items-center justify-center ${hasActiveTraffic ? 'text-blue-600' : 'text-slate-400'}`}>
+                  <div className={`w-full flex items-center justify-center ${hasActiveTraffic ? (isGatewayActive ? 'text-emerald-600' : 'text-blue-600') : 'text-slate-400'}`}>
                     <svg fill="none" height="24" viewBox="0 0 48 24" width="48">
                       <path
                         d="M0,12 L38,12 M32,6 L40,12 L32,18"
@@ -709,28 +736,40 @@ export const InferenceMonitoringPage: React.FC = () => {
                       />
                       {/* Animated packet dot only during live traffic */}
                       {hasActiveTraffic ? (
-                        <circle cx="20" cy="12" r="3" fill="#2563EB" className="animate-ping" />
+                        <circle cx="20" cy="12" r="3" fill={isGatewayActive ? '#059669' : '#2563EB'} className="animate-ping" />
                       ) : (
                         <circle cx="20" cy="12" r="2.5" fill="#94A3B8" />
                       )}
                     </svg>
                   </div>
                   <span className="text-[9px] uppercase tracking-wider text-slate-500 font-semibold">
-                    ClusterIP
+                    {isGatewayActive ? 'Gateway HTTP' : 'ClusterIP'}
                   </span>
                 </div>
               </div>
 
               {/* STEP 2: Central Gateway Node (4 Cols) */}
               <div className="col-span-4 flex flex-col">
-                <div className="p-4 rounded-xl bg-white border border-blue-200/80 shadow-md ring-2 ring-blue-500/10 relative">
+                <div className={`p-4 rounded-xl bg-white border shadow-md relative ${
+                  isGatewayActive
+                    ? 'border-emerald-200/80 ring-2 ring-emerald-500/10'
+                    : 'border-blue-200/80 ring-2 ring-blue-500/10'
+                }`}>
                   <div className="flex items-center justify-between pb-2 mb-2 border-b border-slate-100">
                     <div className="flex items-center gap-2">
-                      <span className={`w-2.5 h-2.5 rounded-full ${hasActiveTraffic ? 'bg-blue-600 animate-ping' : 'bg-slate-400'}`} />
-                      <span className="font-bold text-slate-900 text-sm">Native K8s Service Router</span>
+                      <span className={`w-2.5 h-2.5 rounded-full ${
+                        hasActiveTraffic
+                          ? (isGatewayActive ? 'bg-emerald-600 animate-ping' : 'bg-blue-600 animate-ping')
+                          : 'bg-slate-400'
+                      }`} />
+                      <span className="font-bold text-slate-900 text-sm">
+                        {isGatewayActive ? 'Custom Round Robin Gateway' : 'Native K8s Service Router'}
+                      </span>
                     </div>
-                    <span className="px-2 py-0.5 rounded bg-blue-600 text-white font-mono text-[10px] font-semibold">
-                      L4 IPTABLES
+                    <span className={`px-2 py-0.5 rounded text-white font-mono text-[10px] font-semibold ${
+                      isGatewayActive ? 'bg-emerald-600' : 'bg-blue-600'
+                    }`}>
+                      {isGatewayActive ? 'L7 PROXY' : 'L4 IPTABLES'}
                     </span>
                   </div>
 
@@ -743,14 +782,16 @@ export const InferenceMonitoringPage: React.FC = () => {
                       S<sub>i</sub> = {weightLat.toFixed(2)}·L<sub>norm</sub> + {weightReq.toFixed(2)}·R<sub>norm</sub> + {weightCpu.toFixed(2)}·C<sub>norm</sub> + {weightErr.toFixed(2)}·E<sub>norm</sub>
                     </code>
                     <span className="text-[10px] text-slate-400 mt-1 block">
-                      *Preview calculation only; actual traffic routed via native K8s L4 iptables.
+                      *Preview calculation only; actual traffic routed via {isGatewayActive ? 'Custom Round Robin Gateway' : 'native K8s L4 iptables'}.
                     </span>
                   </div>
 
                   <div className="grid grid-cols-2 gap-2 text-xs font-mono">
                     <div className="p-2 rounded bg-slate-50 border border-slate-100">
                       <span className="text-slate-500 block text-[11px]">Routing Mechanism</span>
-                      <span className="text-xs font-bold text-slate-900">K8s L4 iptables</span>
+                      <span className="text-xs font-bold text-slate-900">
+                        {isGatewayActive ? 'L7 Round Robin' : 'K8s L4 iptables'}
+                      </span>
                     </div>
                     <div className="p-2 rounded bg-slate-50 border border-slate-100">
                       <span className="text-slate-500 block text-[11px]">Total Routed</span>
@@ -886,50 +927,69 @@ export const InferenceMonitoringPage: React.FC = () => {
 
               {/* Strategy Options Radio Grid */}
               <div className="space-y-2.5">
-                {/* 1. Native Kubernetes Service - ACTIVE BASELINE */}
-                <label className="flex items-start gap-3 p-3 rounded-lg bg-blue-50/60 border-2 border-blue-600 cursor-default">
+                {/* 1. Round Robin Gateway */}
+                <label className={`flex items-start gap-3 p-3 rounded-lg ${
+                  isGatewayActive
+                    ? 'bg-emerald-50/60 border-2 border-emerald-600 cursor-default'
+                    : 'bg-slate-50 border border-slate-200 opacity-60 cursor-not-allowed'
+                }`}>
                   <input
                     type="radio"
                     name="strategy"
-                    checked
+                    checked={isGatewayActive}
                     readOnly
-                    className="mt-0.5 text-blue-600 focus:ring-0"
+                    disabled={!isGatewayActive}
+                    className={`mt-0.5 ${isGatewayActive ? 'text-emerald-600 focus:ring-0' : 'text-slate-400 focus:ring-0'}`}
                   />
                   <div className="flex flex-col">
                     <div className="flex items-center gap-2">
-                      <span className="text-xs font-bold text-blue-900">Native Kubernetes Service</span>
-                      <span className="px-1.5 py-0.2 rounded bg-blue-600 text-white font-mono text-[9px] font-bold">
-                        ACTIVE BASELINE
+                      <span className={`text-xs font-bold ${isGatewayActive ? 'text-emerald-900' : 'text-slate-700'}`}>
+                        Round Robin Gateway
+                      </span>
+                      <span className={`px-1.5 py-0.2 rounded font-mono text-[9px] font-bold ${
+                        isGatewayActive ? 'bg-emerald-600 text-white' : 'bg-slate-200 text-slate-600'
+                      }`}>
+                        {isGatewayActive ? 'ACTIVE ROUTING' : 'STANDBY'}
                       </span>
                     </div>
-                    <span className="text-[11px] text-blue-700 mt-0.5">
+                    <span className={`text-[11px] mt-0.5 ${isGatewayActive ? 'text-emerald-700' : 'text-slate-500'}`}>
+                      User-space L7 proxy dispatch rotating prediction requests sequentially 1:1:1 across healthy replicas.
+                    </span>
+                  </div>
+                </label>
+
+                {/* 2. Native Kubernetes Service */}
+                <label className={`flex items-start gap-3 p-3 rounded-lg ${
+                  !isGatewayActive
+                    ? 'bg-blue-50/60 border-2 border-blue-600 cursor-default'
+                    : 'bg-slate-50 border border-slate-200 opacity-60 cursor-not-allowed'
+                }`}>
+                  <input
+                    type="radio"
+                    name="strategy"
+                    checked={!isGatewayActive}
+                    readOnly
+                    disabled={isGatewayActive}
+                    className={`mt-0.5 ${!isGatewayActive ? 'text-blue-600 focus:ring-0' : 'text-slate-400 focus:ring-0'}`}
+                  />
+                  <div className="flex flex-col">
+                    <div className="flex items-center gap-2">
+                      <span className={`text-xs font-bold ${!isGatewayActive ? 'text-blue-900' : 'text-slate-700'}`}>
+                        Native Kubernetes Service
+                      </span>
+                      <span className={`px-1.5 py-0.2 rounded font-mono text-[9px] font-bold ${
+                        !isGatewayActive ? 'bg-blue-600 text-white' : 'bg-slate-200 text-slate-600'
+                      }`}>
+                        {!isGatewayActive ? 'ACTIVE BASELINE' : 'STANDBY BASELINE'}
+                      </span>
+                    </div>
+                    <span className={`text-[11px] mt-0.5 ${!isGatewayActive ? 'text-blue-700' : 'text-slate-500'}`}>
                       L4 iptables/IPVS connection tracking without worker application queue awareness.
                     </span>
                   </div>
                 </label>
 
-                {/* 2. Round Robin - PLANNED */}
-                <label className="flex items-start gap-3 p-3 rounded-lg bg-slate-50 border border-slate-200 opacity-60 cursor-not-allowed">
-                  <input
-                    type="radio"
-                    name="strategy"
-                    disabled
-                    className="mt-0.5 text-slate-400 focus:ring-0"
-                  />
-                  <div className="flex flex-col">
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-xs font-bold text-slate-700">Round Robin</span>
-                      <span className="px-1.5 py-0.2 rounded bg-slate-200 text-slate-600 font-mono text-[9px] font-semibold">
-                        PLANNED
-                      </span>
-                    </div>
-                    <span className="text-[11px] text-slate-500 mt-0.5">
-                      Deterministic 1:1:1 dispatch ignoring pod hardware or pipeline queue depth.
-                    </span>
-                  </div>
-                </label>
-
-                {/* 3. Weighted Round Robin - PLANNED */}
+                {/* 3. Weighted Round Robin - SIMULATION PREVIEW */}
                 <label className="flex items-start gap-3 p-3 rounded-lg bg-slate-50 border border-slate-200 opacity-60 cursor-not-allowed">
                   <input
                     type="radio"
@@ -941,7 +1001,7 @@ export const InferenceMonitoringPage: React.FC = () => {
                     <div className="flex items-center gap-1.5">
                       <span className="text-xs font-bold text-slate-700">Weighted Round Robin</span>
                       <span className="px-1.5 py-0.2 rounded bg-slate-200 text-slate-600 font-mono text-[9px] font-semibold">
-                        PLANNED
+                        SIMULATION / PLANNED
                       </span>
                     </div>
                     <span className="text-[11px] text-slate-500 mt-0.5">
@@ -974,10 +1034,15 @@ export const InferenceMonitoringPage: React.FC = () => {
             </div>
 
             <div className="mt-4 pt-3 border-t border-slate-100">
-              <div className="p-2.5 rounded-lg bg-blue-50/60 border border-blue-200 text-[11px] text-blue-800 flex items-start gap-2">
-                <ShieldCheck size={16} className="text-blue-600 shrink-0 mt-0.5" />
+              <div className={`p-2.5 rounded-lg border text-[11px] flex items-start gap-2 ${
+                isGatewayActive ? 'bg-emerald-50/60 border-emerald-200 text-emerald-800' : 'bg-blue-50/60 border-blue-200 text-blue-800'
+              }`}>
+                <ShieldCheck size={16} className={isGatewayActive ? "text-emerald-600 shrink-0 mt-0.5" : "text-blue-600 shrink-0 mt-0.5"} />
                 <span>
-                  <strong>Native Baseline Protected:</strong> Routing decisions are made solely by native Kubernetes ClusterIP iptables. Alternative strategies are displayed for evaluation comparison.
+                  <strong>{isGatewayActive ? 'Custom Gateway Active:' : 'Native Baseline Active:'}</strong>{' '}
+                  {isGatewayActive
+                    ? 'Inference traffic is dispatched via the user-space Round Robin gateway. Weighted and Adaptive modes remain in evaluation simulation.'
+                    : 'Routing decisions are made solely by native Kubernetes ClusterIP iptables. Alternative strategies are displayed for evaluation comparison.'}
                 </span>
               </div>
             </div>
@@ -988,9 +1053,14 @@ export const InferenceMonitoringPage: React.FC = () => {
             <div>
               <div className="flex items-center justify-between mb-2">
                 <div>
-                  <h3 className="text-base font-bold text-slate-900">Objective Weight Tuning (Simulation Preview)</h3>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-base font-bold text-slate-900">Objective Weight Tuning (Simulation Preview)</h3>
+                    <span className="px-2 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200 font-mono text-[9px] font-bold">
+                      SIMULATION ONLY • ZERO LIVE IMPACT
+                    </span>
+                  </div>
                   <span className="text-xs text-slate-500">
-                    Adjust prospective penalty coefficients for benchmark ranking without changing native K8s routing.
+                    Adjust prospective penalty coefficients for offline ranking analysis and what-if scoring. Live traffic uses {isGatewayActive ? 'Round Robin Gateway' : 'Native K8s Service'}.
                   </span>
                 </div>
                 <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded font-mono text-xs font-bold ${
@@ -1561,23 +1631,27 @@ export const InferenceMonitoringPage: React.FC = () => {
                   <Activity size={18} className="text-blue-600" />
                   <h3 className="text-base font-bold text-slate-900">Traffic Generation Harness</h3>
                 </div>
-                <span className="px-2 py-0.5 rounded bg-blue-50 text-blue-700 font-mono text-[10px] font-bold border border-blue-200">
-                  REAL K8S DISPATCH
+                <span className={`px-2 py-0.5 rounded font-mono text-[10px] font-bold border ${
+                  isGatewayActive
+                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                    : 'bg-blue-50 text-blue-700 border-blue-200'
+                }`}>
+                  {isGatewayActive ? 'L7 GATEWAY DISPATCH' : 'REAL K8S DISPATCH'}
                 </span>
               </div>
               <p className="text-xs text-slate-500 mb-4">
-                Send actual prediction requests through native Kubernetes Service ClusterIP to verify load distribution.
+                Send actual prediction requests through {isGatewayActive ? 'inference gateway' : 'native Kubernetes Service ClusterIP'} to verify load distribution.
               </p>
 
               {/* Traffic details card */}
               <div className="p-3.5 rounded-lg bg-slate-50 border border-slate-200 mb-4">
                 <div className="flex justify-between items-center text-xs text-slate-600 mb-2">
                   <span className="font-medium">Target Service</span>
-                  <span className="font-mono font-bold text-slate-900">inference-service:8000</span>
+                  <span className="font-mono font-bold text-slate-900">{isGatewayActive ? 'inference-gateway:8080' : 'inference-service:8000'}</span>
                 </div>
                 <div className="flex justify-between items-center text-xs text-slate-600 mb-2">
                   <span className="font-medium">Routing Mechanism</span>
-                  <span className="font-mono text-slate-900">IPTables L4 Round-Robin</span>
+                  <span className="font-mono text-slate-900">{isGatewayActive ? 'User-Space L7 Round Robin' : 'IPTables L4 Round-Robin'}</span>
                 </div>
                 <div className="flex justify-between items-center text-xs text-slate-600">
                   <span className="font-medium">Observed Replicas</span>
@@ -1604,9 +1678,15 @@ export const InferenceMonitoringPage: React.FC = () => {
               </div>
 
               {/* Safe environment notice */}
-              <div className="p-2.5 rounded bg-blue-50/60 border border-blue-200 text-slate-600 text-xs flex items-start gap-2">
-                <ShieldCheck size={16} className="text-blue-600 shrink-0 mt-0.5" />
-                <span>Traffic dispatched to native ClusterIP. Real metrics reflect in Prometheus and Grafana.</span>
+              <div className={`p-2.5 rounded border text-xs flex items-start gap-2 ${
+                isGatewayActive ? 'bg-emerald-50/60 border-emerald-200 text-slate-700' : 'bg-blue-50/60 border-blue-200 text-slate-600'
+              }`}>
+                <ShieldCheck size={16} className={isGatewayActive ? "text-emerald-600 shrink-0 mt-0.5" : "text-blue-600 shrink-0 mt-0.5"} />
+                <span>
+                  {isGatewayActive
+                    ? 'Traffic dispatched via live inference gateway. Replicas rotate sequentially and metrics reflect in Prometheus and Grafana.'
+                    : 'Traffic dispatched to native ClusterIP. Real metrics reflect in Prometheus and Grafana.'}
+                </span>
               </div>
             </div>
 
@@ -1639,7 +1719,7 @@ export const InferenceMonitoringPage: React.FC = () => {
             <div>
               <h3 className="text-base font-bold text-slate-900">Real-Time Request Activity & Ingress Log</h3>
               <span className="text-xs text-slate-500">
-                Instantaneous audit trail of requests observed and served across backend replicas via Native Kubernetes Service
+                Instantaneous audit trail of requests observed and served across backend replicas via {isGatewayActive ? 'Custom Round Robin Gateway' : 'Native Kubernetes Service'}
               </span>
             </div>
 

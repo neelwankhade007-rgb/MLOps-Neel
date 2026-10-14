@@ -60,6 +60,8 @@ export interface TelemetrySummary {
   gateway_decision_desc?: string;
   active_policy: string;
   active_policy_desc: string;
+  gateway_active?: boolean;
+  gateway_url?: string | null;
   model_name: string;
   namespace: string;
   cluster_name: string;
@@ -88,6 +90,7 @@ export interface TestTrafficResult {
   status: number;
   status_text: string;
   timestamp: string;
+  routing_strategy?: string;
 }
 
 export const inferenceApi = {
