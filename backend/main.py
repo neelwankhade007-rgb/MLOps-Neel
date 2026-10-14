@@ -491,3 +491,59 @@ def predict(deployment_name: str, req: PredictionRequest, db: Session = Depends(
         "prediction": pred_output,
         "deployment": deployment_name
     }
+
+# ==============================================================================
+# Inference Monitoring & Telemetry Proxy Endpoints
+# ==============================================================================
+import json
+import urllib.request
+from pydantic import BaseModel
+from inference_telemetry import telemetry_aggregator
+
+class TestTrafficRequest(BaseModel):
+    count: int = 5
+
+@app.get("/api/v1/inference-monitoring/telemetry")
+def get_inference_telemetry(
+    w_lat: float = 0.40,
+    w_req: float = 0.30,
+    w_cpu: float = 0.20,
+    w_err: float = 0.10,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Returns real telemetry from all inference replicas, Kubernetes Metrics Server,
+    and Prometheus. Exposes data safely to the frontend without exposing cluster internals.
+    """
+    weights = {"lat": w_lat, "req": w_req, "cpu": w_cpu, "err": w_err}
+    return telemetry_aggregator.get_telemetry_snapshot(weights)
+
+@app.post("/api/v1/inference-monitoring/test-traffic")
+def trigger_test_traffic(
+    req: TestTrafficRequest,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Sends actual test prediction requests through native Kubernetes Service ClusterIP,
+    allowing live verification of request routing across replicas.
+    """
+    results = telemetry_aggregator.send_test_traffic(count=req.count)
+    return {
+        "success": True,
+        "count": len(results),
+        "requests": results
+    }
+
+@app.get("/api/v1/inference-monitoring/prometheus/status")
+def get_prometheus_status(current_user: User = Depends(get_current_user)):
+    """
+    Returns Prometheus scrape health and active targets status for complementary display.
+    """
+    try:
+        req = urllib.request.Request("http://prometheus:9090/api/v1/targets")
+        with urllib.request.urlopen(req, timeout=1.5) as resp:
+            data = json.loads(resp.read().decode())
+            return {"status": "connected", "targets": data.get("data", {}).get("activeTargets", [])}
+    except Exception as e:
+        return {"status": "unavailable", "error": str(e), "targets": []}
+

@@ -1,0 +1,227 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-datasources
+  namespace: mlops
+data:
+  datasources.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        access: proxy
+        url: http://prometheus:9090
+        isDefault: true
+        editable: false
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboards-provider
+  namespace: mlops
+data:
+  dashboards.yaml: |
+    apiVersion: 1
+    providers:
+      - name: 'default'
+        orgId: 1
+        folder: ''
+        type: file
+        disableDeletion: false
+        editable: true
+        options:
+          path: /var/lib/grafana/dashboards
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-inference-dashboard
+  namespace: mlops
+data:
+  inference-monitoring.json: |
+    {
+      "annotations": { "list": [] },
+      "editable": true,
+      "fiscalYearStartMonth": 0,
+      "graphTooltip": 1,
+      "id": null,
+      "links": [],
+      "liveNow": true,
+      "panels": [
+        {
+          "collapsed": false,
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+          "id": 1,
+          "title": "Inference Replicas Overview",
+          "type": "row"
+        },
+        {
+          "title": "Total Requests Served",
+          "type": "stat",
+          "gridPos": { "h": 5, "w": 6, "x": 0, "y": 1 },
+          "id": 2,
+          "targets": [
+            {
+              "expr": "sum(inference_requests_total)",
+              "legendFormat": "Total Requests",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "title": "Request Throughput (req/s)",
+          "type": "stat",
+          "gridPos": { "h": 5, "w": 6, "x": 6, "y": 1 },
+          "id": 3,
+          "targets": [
+            {
+              "expr": "sum(rate(inference_requests_total[30s]))",
+              "legendFormat": "RPS",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "title": "P95 Latency",
+          "type": "stat",
+          "gridPos": { "h": 5, "w": 6, "x": 12, "y": 1 },
+          "id": 4,
+          "targets": [
+            {
+              "expr": "max(inference_request_duration_seconds{quantile=\"0.95\"}) * 1000",
+              "legendFormat": "P95 Latency (ms)",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "title": "Active Replicas",
+          "type": "stat",
+          "gridPos": { "h": 5, "w": 6, "x": 18, "y": 1 },
+          "id": 5,
+          "targets": [
+            {
+              "expr": "count(inference_replica_up == 1)",
+              "legendFormat": "Healthy Pods",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "title": "Requests per Replica",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
+          "id": 6,
+          "targets": [
+            {
+              "expr": "inference_requests_total",
+              "legendFormat": "{{replica_id}}",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "title": "Inference Latency Distribution (ms)",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
+          "id": 7,
+          "targets": [
+            {
+              "expr": "inference_request_duration_seconds{quantile=\"0.5\"} * 1000",
+              "legendFormat": "P50 {{replica_id}}",
+              "refId": "A"
+            },
+            {
+              "expr": "inference_request_duration_seconds{quantile=\"0.95\"} * 1000",
+              "legendFormat": "P95 {{replica_id}}",
+              "refId": "B"
+            },
+            {
+              "expr": "inference_request_duration_seconds{quantile=\"0.99\"} * 1000",
+              "legendFormat": "P99 {{replica_id}}",
+              "refId": "C"
+            }
+          ]
+        }
+      ],
+      "refresh": "5s",
+      "schemaVersion": 38,
+      "style": "dark",
+      "tags": ["mlops", "inference"],
+      "time": { "from": "now-15m", "to": "now" },
+      "timepicker": { "refresh_intervals": ["5s", "10s", "30s", "1m"] },
+      "timezone": "",
+      "title": "MLOps Inference Monitoring",
+      "uid": "mlops-inference"
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: mlops
+  labels:
+    app: grafana
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: grafana
+  template:
+    metadata:
+      labels:
+        app: grafana
+    spec:
+      containers:
+        - name: grafana
+          image: grafana/grafana:10.0.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 3000
+          env:
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              value: "admin"
+            - name: GF_AUTH_ANONYMOUS_ENABLED
+              value: "true"
+            - name: GF_AUTH_ANONYMOUS_ORG_ROLE
+              value: "Viewer"
+          volumeMounts:
+            - name: datasources
+              mountPath: /etc/grafana/provisioning/datasources
+            - name: dashboards-provider
+              mountPath: /etc/grafana/provisioning/dashboards
+            - name: inference-dashboard
+              mountPath: /var/lib/grafana/dashboards
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+      volumes:
+        - name: datasources
+          configMap:
+            name: grafana-datasources
+        - name: dashboards-provider
+          configMap:
+            name: grafana-dashboards-provider
+        - name: inference-dashboard
+          configMap:
+            name: grafana-inference-dashboard
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  namespace: mlops
+  labels:
+    app: grafana
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 3000
+      targetPort: 3000
+  selector:
+    app: grafana

@@ -18,6 +18,7 @@ import DatasetsPage from './pages/DatasetsPage';
 import TrainingPage from './pages/TrainingPage';
 import RegistryPage from './pages/RegistryPage';
 import PredictPage from './pages/PredictPage';
+import InferenceMonitoringPage from './pages/InferenceMonitoringPage';
 
 const AppContent: React.FC = () => {
   const { auth, loadingApp } = useAuth();
@@ -47,6 +48,8 @@ const AppContent: React.FC = () => {
             <Route path="/training" element={<TrainingPage />} />
             <Route path="/registry" element={<RegistryPage />} />
             <Route path="/predict" element={<PredictPage />} />
+            <Route path="/inference-monitoring" element={<InferenceMonitoringPage />} />
+            <Route path="/adaptive-load-balancing" element={<Navigate to="/inference-monitoring" replace />} />
             <Route path="*" element={<Navigate to="/" />} />
           </Routes>
         </AppLayout>

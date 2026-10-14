@@ -3,11 +3,13 @@ import { Link, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard,
   Database,
-  BrainCircuit,
-  Rocket,
   Activity,
-  LogOut,
   Box,
+  Rocket,
+  GitFork,
+  LogOut,
+  BrainCircuit,
+  User,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuth } from '../../hooks/useAuth';
@@ -17,26 +19,36 @@ interface NavItemProps {
   to: string;
   icon: React.ElementType;
   children: React.ReactNode;
+  badge?: string;
 }
 
-const NavItem: React.FC<NavItemProps> = ({ to, icon: Icon, children }) => {
+const NavItem: React.FC<NavItemProps> = ({ to, icon: Icon, children, badge }) => {
   const location = useLocation();
-  const isActive = location.pathname === to;
+  const isActive = location.pathname === to || (to !== '/' && location.pathname.startsWith(to));
 
   return (
     <Link
       to={to}
-      className={`flex items-center px-4 py-3 mx-2 rounded-lg transition-colors font-medium ${
+      className={`flex items-center justify-between px-3 py-2.5 mx-2 rounded-lg transition-all text-xs font-medium ${
         isActive
-          ? 'bg-indigo-50 text-indigo-700'
-          : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+          ? 'bg-blue-600 text-white shadow-sm'
+          : 'text-slate-400 hover:bg-slate-800/60 hover:text-white'
       }`}
     >
-      <Icon
-        size={20}
-        className={`mr-3 ${isActive ? 'text-indigo-600' : 'text-slate-400'}`}
-      />
-      {children}
+      <div className="flex items-center gap-2.5">
+        <Icon
+          size={18}
+          className={`${isActive ? 'text-white' : 'text-slate-400'}`}
+        />
+        <span>{children}</span>
+      </div>
+      {badge && (
+        <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${
+          isActive ? 'bg-blue-700 text-white' : 'bg-slate-800 text-blue-400'
+        }`}>
+          {badge}
+        </span>
+      )}
     </Link>
   );
 };
@@ -49,41 +61,89 @@ export const Sidebar: React.FC = () => {
     toast('Logged out');
   };
 
+  const username = 'Dr. Aris Vance';
+
   return (
-    <aside className="w-64 bg-white border-r border-slate-200 flex flex-col shrink-0">
-      <div className="p-6 flex items-center font-black text-xl text-slate-900 tracking-tight">
-        <div className="w-8 h-8 rounded-lg bg-indigo-600 text-white flex items-center justify-center mr-3 shadow-md shadow-indigo-200">
-          <BrainCircuit size={20} />
+    <aside className="w-60 bg-[#0B1120] text-slate-200 border-r border-slate-800/80 flex flex-col justify-between shrink-0 shadow-lg select-none z-30">
+      <div className="flex flex-col">
+        {/* Brand Header */}
+        <div className="h-14 px-4 flex items-center justify-between border-b border-slate-800/70">
+          <div className="flex items-center gap-2.5">
+            <div className="w-7 h-7 rounded-lg bg-blue-600 text-white flex items-center justify-center shadow-md shadow-blue-500/20">
+              <BrainCircuit size={17} />
+            </div>
+            <span className="font-semibold text-sm tracking-tight text-white font-['Geist',sans-serif]">
+              Nexus<span className="text-blue-400 font-normal ml-0.5">MLOps</span>
+            </span>
+          </div>
+          <span className="px-1.5 py-0.5 rounded bg-emerald-950/80 text-emerald-400 border border-emerald-800/40 font-mono text-[9px] uppercase tracking-wider font-semibold">
+            RESEARCH
+          </span>
         </div>
-        Nexus<span className="text-indigo-600 font-normal ml-1">MLOps</span>
+
+        {/* Navigation */}
+        <nav className="flex flex-col gap-1 p-2 pt-3">
+          <NavItem to="/" icon={LayoutDashboard}>
+            Overview
+          </NavItem>
+          <NavItem to="/datasets" icon={Database}>
+            Datasets
+          </NavItem>
+          <NavItem to="/training" icon={Activity}>
+            Training
+          </NavItem>
+          <NavItem to="/registry" icon={Box}>
+            Model Registry
+          </NavItem>
+          <NavItem to="/predict" icon={Rocket}>
+            Predictions
+          </NavItem>
+          <NavItem to="/inference-monitoring" icon={GitFork} badge="LIVE">
+            Adaptive Load Balancing
+          </NavItem>
+        </nav>
       </div>
 
-      <nav className="flex-1 py-4 space-y-1">
-        <NavItem to="/" icon={LayoutDashboard}>
-          Dashboard
-        </NavItem>
-        <NavItem to="/datasets" icon={Database}>
-          Datasets
-        </NavItem>
-        <NavItem to="/training" icon={Activity}>
-          Training Jobs
-        </NavItem>
-        <NavItem to="/registry" icon={Box}>
-          Registry & Deploy
-        </NavItem>
-        <NavItem to="/predict" icon={Rocket}>
-          Predictions
-        </NavItem>
-      </nav>
+      {/* Cluster Status & User Profile Footer */}
+      <div className="flex flex-col border-t border-slate-800/80 p-3 gap-2.5">
+        {/* Cluster Status Chip */}
+        <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-900/90 border border-slate-800">
+          <span className="relative flex h-2 w-2">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+            <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
+          </span>
+          <span className="font-mono text-[11px] text-slate-300 truncate">
+            Minikube-Cluster: Online
+          </span>
+        </div>
 
-      <div className="p-4 border-t border-slate-100 flex items-center justify-between gap-2">
-        <button
-          onClick={handleLogout}
-          className="flex items-center flex-1 px-4 py-2 text-sm font-medium text-slate-600 hover:bg-red-50 hover:text-red-600 rounded-lg transition-colors"
-        >
-          <LogOut size={18} className="mr-3" /> Logout
-        </button>
-        <ThemeToggle fixed={false} />
+        {/* User Profile Card */}
+        <div className="flex items-center justify-between pt-1">
+          <div className="flex items-center gap-2.5 overflow-hidden">
+            <div className="w-7 h-7 rounded-full bg-blue-600 flex-shrink-0 flex items-center justify-center text-white">
+              <User size={15} />
+            </div>
+            <div className="flex flex-col truncate">
+              <span className="text-xs text-white font-medium truncate">
+                {username}
+              </span>
+              <span className="text-[10px] text-slate-400 font-mono truncate">
+                MLOps Lead
+              </span>
+            </div>
+          </div>
+          <div className="flex items-center gap-1">
+            <ThemeToggle fixed={false} />
+            <button
+              onClick={handleLogout}
+              className="p-1.5 rounded text-slate-400 hover:text-red-400 hover:bg-slate-800 transition-colors"
+              title="Logout"
+              type="button"
+            >
+              <LogOut size={16} />
+            </button>
+          </div>
+        </div>
       </div>
     </aside>
   );
