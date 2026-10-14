@@ -221,7 +221,7 @@ If you merely stopped your cluster, you can resume without recreating anything (
 ```bash
 minikube start
 kubectl get pods -n mlops
-kubectl port-forward -n mlops service/frontend 8080:80
+
 ```
 
 There is no need to rebuild images, reload images, re-apply manifests, or recreate namespaces.

@@ -1,0 +1,179 @@
+[
+  {
+    "profile": "smoke_test",
+    "description": "Smoke Test (1 user, 10s)",
+    "timestamp_utc": "2026-10-14T16:44:59.941150Z",
+    "concurrency_users": 1,
+    "spawn_rate": 1,
+    "duration_configured": "10s",
+    "duration_actual_sec": 10.78,
+    "locust_metrics": {
+      "requests": 33,
+      "failures": 0,
+      "failure_rate_pct": 0.0,
+      "throughput_rps": 3.7510243146059667,
+      "client_avg_ms": 17.515966666961145,
+      "client_min_ms": 14.178400015225634,
+      "client_max_ms": 36.30249999696389,
+      "client_p50_ms": 17.0,
+      "client_p95_ms": 22.0,
+      "client_p99_ms": 36.0
+    },
+    "prometheus_replica_delta": {
+      "inference-service-5c646f9d9c-7r8qz": 36,
+      "inference-service-5c646f9d9c-cgfdj": 0,
+      "inference-service-5c646f9d9c-vm99c": 0
+    },
+    "traffic_distribution_pct": {
+      "inference-service-5c646f9d9c-7r8qz": 100.0,
+      "inference-service-5c646f9d9c-cgfdj": 0.0,
+      "inference-service-5c646f9d9c-vm99c": 0.0
+    },
+    "pod_resources_before": {
+      "inference-service-5c646f9d9c-7r8qz": {
+        "cpu": "3m",
+        "memory": "231Mi"
+      },
+      "inference-service-5c646f9d9c-cgfdj": {
+        "cpu": "3m",
+        "memory": "191Mi"
+      },
+      "inference-service-5c646f9d9c-vm99c": {
+        "cpu": "3m",
+        "memory": "184Mi"
+      }
+    },
+    "pod_resources_after": {
+      "inference-service-5c646f9d9c-7r8qz": {
+        "cpu": "3m",
+        "memory": "231Mi"
+      },
+      "inference-service-5c646f9d9c-cgfdj": {
+        "cpu": "3m",
+        "memory": "191Mi"
+      },
+      "inference-service-5c646f9d9c-vm99c": {
+        "cpu": "3m",
+        "memory": "184Mi"
+      }
+    }
+  },
+  {
+    "profile": "light_load",
+    "description": "Light Load (3 concurrent users, 30s)",
+    "timestamp_utc": "2026-10-14T16:45:35.258311Z",
+    "concurrency_users": 3,
+    "spawn_rate": 1,
+    "duration_configured": "30s",
+    "duration_actual_sec": 30.78,
+    "locust_metrics": {
+      "requests": 322,
+      "failures": 0,
+      "failure_rate_pct": 0.0,
+      "throughput_rps": 11.015269297512615,
+      "client_avg_ms": 15.223429503421132,
+      "client_min_ms": 12.278600013814867,
+      "client_max_ms": 35.96619999734685,
+      "client_p50_ms": 14.0,
+      "client_p95_ms": 23.0,
+      "client_p99_ms": 28.0
+    },
+    "prometheus_replica_delta": {
+      "inference-service-5c646f9d9c-7r8qz": 312,
+      "inference-service-5c646f9d9c-cgfdj": 0,
+      "inference-service-5c646f9d9c-vm99c": 0
+    },
+    "traffic_distribution_pct": {
+      "inference-service-5c646f9d9c-7r8qz": 100.0,
+      "inference-service-5c646f9d9c-cgfdj": 0.0,
+      "inference-service-5c646f9d9c-vm99c": 0.0
+    },
+    "pod_resources_before": {
+      "inference-service-5c646f9d9c-7r8qz": {
+        "cpu": "3m",
+        "memory": "231Mi"
+      },
+      "inference-service-5c646f9d9c-cgfdj": {
+        "cpu": "3m",
+        "memory": "191Mi"
+      },
+      "inference-service-5c646f9d9c-vm99c": {
+        "cpu": "3m",
+        "memory": "184Mi"
+      }
+    },
+    "pod_resources_after": {
+      "inference-service-5c646f9d9c-7r8qz": {
+        "cpu": "13m",
+        "memory": "231Mi"
+      },
+      "inference-service-5c646f9d9c-cgfdj": {
+        "cpu": "3m",
+        "memory": "191Mi"
+      },
+      "inference-service-5c646f9d9c-vm99c": {
+        "cpu": "3m",
+        "memory": "184Mi"
+      }
+    }
+  },
+  {
+    "profile": "moderate_load",
+    "description": "Moderate Load (5 concurrent users, 30s)",
+    "timestamp_utc": "2026-10-14T16:46:10.485565Z",
+    "concurrency_users": 5,
+    "spawn_rate": 2,
+    "duration_configured": "30s",
+    "duration_actual_sec": 30.7,
+    "locust_metrics": {
+      "requests": 535,
+      "failures": 0,
+      "failure_rate_pct": 0.0,
+      "throughput_rps": 18.332202483253806,
+      "client_avg_ms": 15.66502691636071,
+      "client_min_ms": 12.049399985698983,
+      "client_max_ms": 40.411399997537956,
+      "client_p50_ms": 14.0,
+      "client_p95_ms": 24.0,
+      "client_p99_ms": 33.0
+    },
+    "prometheus_replica_delta": {
+      "inference-service-5c646f9d9c-7r8qz": 534,
+      "inference-service-5c646f9d9c-cgfdj": 0,
+      "inference-service-5c646f9d9c-vm99c": 0
+    },
+    "traffic_distribution_pct": {
+      "inference-service-5c646f9d9c-7r8qz": 100.0,
+      "inference-service-5c646f9d9c-cgfdj": 0.0,
+      "inference-service-5c646f9d9c-vm99c": 0.0
+    },
+    "pod_resources_before": {
+      "inference-service-5c646f9d9c-7r8qz": {
+        "cpu": "13m",
+        "memory": "231Mi"
+      },
+      "inference-service-5c646f9d9c-cgfdj": {
+        "cpu": "3m",
+        "memory": "191Mi"
+      },
+      "inference-service-5c646f9d9c-vm99c": {
+        "cpu": "3m",
+        "memory": "184Mi"
+      }
+    },
+    "pod_resources_after": {
+      "inference-service-5c646f9d9c-7r8qz": {
+        "cpu": "129m",
+        "memory": "231Mi"
+      },
+      "inference-service-5c646f9d9c-cgfdj": {
+        "cpu": "3m",
+        "memory": "191Mi"
+      },
+      "inference-service-5c646f9d9c-vm99c": {
+        "cpu": "3m",
+        "memory": "184Mi"
+      }
+    }
+  }
+]

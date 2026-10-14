@@ -1,0 +1,185 @@
+[
+  {
+    "profile": "cluster_smoke_test",
+    "description": "Cluster Service-DNS Smoke Test (1 user, 10s)",
+    "routing_target": "http://inference-service.mlops.svc.cluster.local:8000",
+    "benchmark_execution_environment": "In-Cluster Ephemeral Pod (locust-runner)",
+    "timestamp_utc": "2026-10-14T16:58:17.733737Z",
+    "concurrency_users": 1,
+    "spawn_rate": 1,
+    "duration_configured": "10s",
+    "duration_actual_sec": 10.5,
+    "locust_metrics": {
+      "requests": 31,
+      "failures": 0,
+      "failure_rate_pct": 0.0,
+      "throughput_rps": 3.48,
+      "client_avg_ms": 26.86,
+      "client_min_ms": 11.8,
+      "client_max_ms": 331.33,
+      "client_p50_ms": 17.0,
+      "client_p95_ms": 23.0,
+      "client_p99_ms": 330.0
+    },
+    "prometheus_replica_delta": {
+      "inference-service-5c646f9d9c-7r8qz": 0,
+      "inference-service-5c646f9d9c-cgfdj": 34,
+      "inference-service-5c646f9d9c-vm99c": 0
+    },
+    "traffic_distribution_pct": {
+      "inference-service-5c646f9d9c-7r8qz": 0.0,
+      "inference-service-5c646f9d9c-cgfdj": 100.0,
+      "inference-service-5c646f9d9c-vm99c": 0.0
+    },
+    "pod_resources_before": {
+      "inference-service-5c646f9d9c-7r8qz": {
+        "cpu": "3m",
+        "memory": "218Mi"
+      },
+      "inference-service-5c646f9d9c-cgfdj": {
+        "cpu": "3m",
+        "memory": "190Mi"
+      },
+      "inference-service-5c646f9d9c-vm99c": {
+        "cpu": "3m",
+        "memory": "184Mi"
+      }
+    },
+    "pod_resources_after": {
+      "inference-service-5c646f9d9c-7r8qz": {
+        "cpu": "4m",
+        "memory": "220Mi"
+      },
+      "inference-service-5c646f9d9c-cgfdj": {
+        "cpu": "3m",
+        "memory": "190Mi"
+      },
+      "inference-service-5c646f9d9c-vm99c": {
+        "cpu": "3m",
+        "memory": "184Mi"
+      }
+    }
+  },
+  {
+    "profile": "cluster_light_load",
+    "description": "Cluster Service-DNS Light Load (3 users, 30s)",
+    "routing_target": "http://inference-service.mlops.svc.cluster.local:8000",
+    "benchmark_execution_environment": "In-Cluster Ephemeral Pod (locust-runner)",
+    "timestamp_utc": "2026-10-14T16:58:53.084374Z",
+    "concurrency_users": 3,
+    "spawn_rate": 1,
+    "duration_configured": "30s",
+    "duration_actual_sec": 30.45,
+    "locust_metrics": {
+      "requests": 314,
+      "failures": 0,
+      "failure_rate_pct": 0.0,
+      "throughput_rps": 10.82,
+      "client_avg_ms": 13.82,
+      "client_min_ms": 11.14,
+      "client_max_ms": 242.53,
+      "client_p50_ms": 12.0,
+      "client_p95_ms": 18.0,
+      "client_p99_ms": 19.0
+    },
+    "prometheus_replica_delta": {
+      "inference-service-5c646f9d9c-7r8qz": 108,
+      "inference-service-5c646f9d9c-cgfdj": 105,
+      "inference-service-5c646f9d9c-vm99c": 100
+    },
+    "traffic_distribution_pct": {
+      "inference-service-5c646f9d9c-7r8qz": 34.5,
+      "inference-service-5c646f9d9c-cgfdj": 33.5,
+      "inference-service-5c646f9d9c-vm99c": 31.9
+    },
+    "pod_resources_before": {
+      "inference-service-5c646f9d9c-7r8qz": {
+        "cpu": "4m",
+        "memory": "220Mi"
+      },
+      "inference-service-5c646f9d9c-cgfdj": {
+        "cpu": "3m",
+        "memory": "190Mi"
+      },
+      "inference-service-5c646f9d9c-vm99c": {
+        "cpu": "3m",
+        "memory": "184Mi"
+      }
+    },
+    "pod_resources_after": {
+      "inference-service-5c646f9d9c-7r8qz": {
+        "cpu": "4m",
+        "memory": "220Mi"
+      },
+      "inference-service-5c646f9d9c-cgfdj": {
+        "cpu": "3m",
+        "memory": "190Mi"
+      },
+      "inference-service-5c646f9d9c-vm99c": {
+        "cpu": "3m",
+        "memory": "184Mi"
+      }
+    }
+  },
+  {
+    "profile": "cluster_moderate_load",
+    "description": "Cluster Service-DNS Moderate Load (5 users, 30s)",
+    "routing_target": "http://inference-service.mlops.svc.cluster.local:8000",
+    "benchmark_execution_environment": "In-Cluster Ephemeral Pod (locust-runner)",
+    "timestamp_utc": "2026-10-14T16:59:28.431454Z",
+    "concurrency_users": 5,
+    "spawn_rate": 2,
+    "duration_configured": "30s",
+    "duration_actual_sec": 30.44,
+    "locust_metrics": {
+      "requests": 550,
+      "failures": 0,
+      "failure_rate_pct": 0.0,
+      "throughput_rps": 19.01,
+      "client_avg_ms": 12.68,
+      "client_min_ms": 10.33,
+      "client_max_ms": 30.75,
+      "client_p50_ms": 12.0,
+      "client_p95_ms": 18.0,
+      "client_p99_ms": 22.0
+    },
+    "prometheus_replica_delta": {
+      "inference-service-5c646f9d9c-7r8qz": 341,
+      "inference-service-5c646f9d9c-cgfdj": 220,
+      "inference-service-5c646f9d9c-vm99c": 0
+    },
+    "traffic_distribution_pct": {
+      "inference-service-5c646f9d9c-7r8qz": 60.8,
+      "inference-service-5c646f9d9c-cgfdj": 39.2,
+      "inference-service-5c646f9d9c-vm99c": 0.0
+    },
+    "pod_resources_before": {
+      "inference-service-5c646f9d9c-7r8qz": {
+        "cpu": "4m",
+        "memory": "220Mi"
+      },
+      "inference-service-5c646f9d9c-cgfdj": {
+        "cpu": "3m",
+        "memory": "190Mi"
+      },
+      "inference-service-5c646f9d9c-vm99c": {
+        "cpu": "3m",
+        "memory": "184Mi"
+      }
+    },
+    "pod_resources_after": {
+      "inference-service-5c646f9d9c-7r8qz": {
+        "cpu": "40m",
+        "memory": "220Mi"
+      },
+      "inference-service-5c646f9d9c-cgfdj": {
+        "cpu": "35m",
+        "memory": "190Mi"
+      },
+      "inference-service-5c646f9d9c-vm99c": {
+        "cpu": "25m",
+        "memory": "184Mi"
+      }
+    }
+  }
+]

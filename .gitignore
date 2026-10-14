@@ -55,3 +55,6 @@ mixed.csv
 numeric.csv
 test_housing.csv
 
+# Audit and diagnostic reports
+*audit*.md
+
