@@ -10,6 +10,7 @@ from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 from collections import deque
 from typing import Dict, Any, List, Optional
+from routing import routing_config, STRATEGY_NATIVE, STRATEGY_WEIGHTED_ROUND_ROBIN
 
 # Constants
 K8S_TOKEN_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/token"
@@ -182,6 +183,7 @@ class TelemetryAggregator:
 
     def get_gateway_runtime_status(self) -> Dict[str, Any]:
         """Query gateway /ready to determine actual active routing mechanism from runtime evidence."""
+        active_strategy = routing_config.get_strategy()
         gateway_host = os.environ.get("GATEWAY_URL", "http://inference-gateway:8080")
         url = f"{gateway_host}/ready"
         t0 = time.perf_counter()
@@ -191,11 +193,18 @@ class TelemetryAggregator:
                 elapsed_ms = (time.perf_counter() - t0) * 1000.0
                 if resp.status == 200:
                     data = json.loads(resp.read().decode())
-                    if data.get("status") == "ready":
+                    if data.get("status") == "ready" and active_strategy != STRATEGY_NATIVE:
+                        label = routing_config.get_strategy_label()
+                        wrr_weights = data.get("wrr_weights", routing_config.to_dict()["wrr_weights"])
+                        strategy_detail = (
+                            f"weighted distribution ({':'.join(map(str, wrr_weights))})"
+                            if active_strategy == STRATEGY_WEIGHTED_ROUND_ROBIN
+                            else "equal distribution"
+                        )
                         return {
                             "is_active": True,
-                            "strategy": "Round Robin",
-                            "strategy_desc": f"Custom L7 Gateway (Round Robin across {data.get('available_replicas', 3)} ready replicas)",
+                            "strategy": label,
+                            "strategy_desc": f"Custom L7 Gateway ({strategy_detail} across {data.get('available_replicas', 3)} ready replicas)",
                             "gateway_url": gateway_host,
                             "decision_ms": round(elapsed_ms, 2),
                             "decision_desc": f"L7 User-Space Reverse Proxy (~{round(elapsed_ms, 1)}ms gateway overhead)",
@@ -204,6 +213,17 @@ class TelemetryAggregator:
                         }
         except Exception:
             pass
+        if active_strategy != STRATEGY_NATIVE:
+            return {
+                "is_active": False,
+                "strategy": routing_config.get_strategy_label(),
+                "strategy_desc": "Gateway strategy selected, but no ready gateway is available",
+                "gateway_url": gateway_host,
+                "decision_ms": None,
+                "decision_desc": "Gateway unavailable",
+                "model_run_id": None,
+                "available_replicas": 0
+            }
         return {
             "is_active": False,
             "strategy": "Native Kubernetes Service",
@@ -484,11 +504,11 @@ class TelemetryAggregator:
         }
 
     def send_test_traffic(self, count: int = 1) -> List[Dict[str, Any]]:
-        """Send actual prediction requests through inference gateway (with ClusterIP fallback)."""
+        """Send test predictions through the active routing strategy."""
         count = max(1, min(20, count))
         results = []
-        gateway_host = os.environ.get("GATEWAY_URL", "http://inference-gateway:8080")
-        primary_url = f"{gateway_host}/predict" if not gateway_host.endswith("/predict") else gateway_host
+        target_url, strategy = routing_config.get_target_url()
+        primary_url = target_url
         fallback_url = f"http://{CLUSTERIP_HOST}:8000/predict"
 
         # Titanic sample payload
@@ -516,6 +536,7 @@ class TelemetryAggregator:
                     primary_url,
                     data=data_bytes,
                     headers={"Content-Type": "application/json"}
+                    | ({"X-Routing-Strategy": strategy} if strategy != STRATEGY_NATIVE else {})
                 )
                 try:
                     resp_ctx = urllib.request.urlopen(req, timeout=3.0)
@@ -538,7 +559,7 @@ class TelemetryAggregator:
                         "prediction": body.get("prediction", "1"),
                         "latency_ms": body.get("latency_ms", round(elapsed, 2)),
                         "roundtrip_ms": round(elapsed, 2),
-                        "routing_strategy": body.get("gateway_meta", {}).get("routing_strategy", "native_clusterip"),
+                        "routing_strategy": body.get("gateway_meta", {}).get("routing_strategy", strategy),
                         "status": 200,
                         "status_text": "200 OK",
                         "timestamp": datetime.utcnow().strftime("%H:%M:%S.%f")[:-3]

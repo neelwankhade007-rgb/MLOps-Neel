@@ -15,6 +15,7 @@ from ml_utils import (
     init_minio, upload_dataset, train_model, load_mlflow_model,
     delete_dataset_file, delete_mlflow_run
 )
+from routing import routing_config
 
 import uuid
 
@@ -416,7 +417,7 @@ def get_deployment_schema(deployment_name: str, db: Session = Depends(get_db)):
     except Exception:
         raise HTTPException(status_code=404, detail="Schema not found for this deployment.")
 
-# Prediction – forward through the inference gateway (round-robin)
+# Prediction – forward through the selected native or gateway strategy
 import os as _os
 import urllib.error as _urllib_error
 
@@ -455,17 +456,18 @@ def predict(
             ),
         )
 
-    # Forward prediction to the inference gateway
+    # Forward predictions through the active strategy while preserving model-run validation.
     payload = json.dumps({"features": req.features}).encode("utf-8")
-    gateway_predict_url = f"{GATEWAY_URL}/predict"
+    target_url, strategy = routing_config.get_target_url()
 
     try:
         gw_req = urllib.request.Request(
-            gateway_predict_url,
+            target_url,
             data=payload,
             headers={
                 "Content-Type": "application/json",
                 "X-Model-Run-ID": exp.run_id,
+                "X-Routing-Strategy": strategy,
             },
         )
         with urllib.request.urlopen(gw_req, timeout=15.0) as resp:
@@ -504,6 +506,21 @@ from inference_telemetry import telemetry_aggregator
 
 class TestTrafficRequest(BaseModel):
     count: int = 5
+
+class RoutingStrategyRequest(BaseModel):
+    strategy: str
+
+@app.get("/api/v1/inference-monitoring/routing-strategy")
+def get_routing_strategy(current_user: User = Depends(get_current_user)):
+    return routing_config.to_dict()
+
+@app.put("/api/v1/inference-monitoring/routing-strategy")
+def set_routing_strategy(req: RoutingStrategyRequest, current_user: User = Depends(get_current_user)):
+    try:
+        routing_config.set_strategy(req.strategy)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return routing_config.to_dict()
 
 @app.get("/api/v1/inference-monitoring/telemetry")
 def get_inference_telemetry(

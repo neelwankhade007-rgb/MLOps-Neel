@@ -55,6 +55,36 @@ class TestRoundRobinRouter:
             for i in range(3):
                 assert r.next_endpoint() == expected[i], f"cycle {cycle}, index {i}"
 
+    def test_weighted_round_robin_distribution(self):
+        r = RoundRobinRouter()
+        r.check_health = False
+        ips = ["10.0.0.1", "10.0.0.2", "10.0.0.3"]
+        with patch.object(r, "_resolve_endpoints", return_value=ips):
+            r.refresh()
+        selected = [r.next_endpoint("weighted_round_robin") for _ in range(10)]
+        assert selected.count("http://10.0.0.1:8000") == 5
+        assert selected.count("http://10.0.0.2:8000") == 3
+        assert selected.count("http://10.0.0.3:8000") == 2
+
+    def test_wrr_excludes_unhealthy_endpoints_and_supports_failover(self):
+        r = RoundRobinRouter()
+        r.check_health = True
+        with patch.object(r, "_resolve_endpoints", return_value=["10.0.0.1", "10.0.0.2", "10.0.0.3"]), \
+             patch.object(r, "_is_endpoint_ready", side_effect=lambda ip: ip != "10.0.0.2"):
+            assert r.refresh() == ["10.0.0.1", "10.0.0.3"]
+        first = r.next_endpoint("weighted_round_robin")
+        second = r.next_endpoint("weighted_round_robin", exclude=[first])
+        assert first != second
+        assert second in ("http://10.0.0.1:8000", "http://10.0.0.3:8000")
+
+    def test_wrr_weights_must_be_positive_integers(self):
+        with patch.dict("os.environ", {"WRR_WEIGHTS": "5,0,2"}):
+            with pytest.raises(ValueError, match="positive integers"):
+                RoundRobinRouter()
+        with patch.dict("os.environ", {"WRR_WEIGHTS": "5,three,2"}):
+            with pytest.raises(ValueError, match="positive integers"):
+                RoundRobinRouter()
+
     def test_concurrent_round_robin(self):
         """Ensure thread-safety under concurrent access with zero state corruption."""
         r = RoundRobinRouter()
@@ -225,6 +255,7 @@ class TestGatewayServiceEndpoints:
             assert meta["target_endpoint"] == "http://10.0.0.1:8000"
             assert meta["upstream_latency_ms"] == 14.52
             assert meta["gateway_latency_ms"] >= 0
+
 
     def test_predict_model_run_mismatch_rejected(self, client):
         """Requests targeting a different model run are rejected before forwarding."""
@@ -437,8 +468,32 @@ class TestTelemetryGatewayIntegration:
         assert status["available_replicas"] == 3
         assert status["decision_ms"] is not None
 
+    def test_telemetry_reports_selected_weighted_strategy(self):
+        import sys
+        from pathlib import Path
+        backend_dir = str(Path(__file__).parent.parent / "backend")
+        if backend_dir not in sys.path:
+            sys.path.insert(0, backend_dir)
+        from inference_telemetry import TelemetryAggregator, routing_config
+
+        aggregator = TelemetryAggregator()
+        response = MagicMock()
+        response.status = 200
+        response.read.return_value = json.dumps({"status": "ready", "available_replicas": 3}).encode()
+        response.__enter__.return_value = response
+        response.__exit__.return_value = None
+        prior = routing_config.get_strategy()
+        try:
+            routing_config.set_strategy("weighted_round_robin")
+            with patch("urllib.request.urlopen", return_value=response):
+                status = aggregator.get_gateway_runtime_status()
+            assert status["strategy"] == "Weighted Round Robin"
+            assert "weighted distribution" in status["strategy_desc"]
+        finally:
+            routing_config.set_strategy(prior)
+
     def test_gateway_runtime_status_when_unreachable(self):
-        """When gateway is unreachable, status cleanly falls back to Native Kubernetes Service."""
+        """When gateway is unreachable, telemetry retains the selected strategy and exposes its unavailable state."""
         import sys
         import urllib.error
         from pathlib import Path
@@ -454,9 +509,9 @@ class TestTelemetryGatewayIntegration:
             status = aggregator.get_gateway_runtime_status()
 
         assert status["is_active"] is False
-        assert status["strategy"] == "Native Kubernetes Service"
+        assert status["strategy"] == "Round Robin"
         assert status["decision_ms"] is None
-        assert "L4 iptables" in status["strategy_desc"]
+        assert "no ready gateway" in status["strategy_desc"]
 
     def test_telemetry_snapshot_active_policy_round_robin(self):
         """Telemetry snapshot summary reflects Round Robin when gateway is reachable."""

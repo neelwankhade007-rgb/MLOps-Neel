@@ -9,3 +9,4 @@ data:
   MLFLOW_TRACKING_URI: http://mlflow:5000
   MLFLOW_S3_ENDPOINT_URL: http://minio:9000
   MLFLOW_S3_IGNORE_TLS: "true"
+  WRR_WEIGHTS: "5,3,2"

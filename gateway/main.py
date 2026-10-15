@@ -55,6 +55,7 @@ def ready(response: Response):
     return {
         "status": "ready",
         "available_replicas": router.endpoint_count,
+        "wrr_weights": router.weights,
         "model_run_id": router.model_run_id or MODEL_RUN_ID,
     }
 
@@ -64,8 +65,7 @@ def ready(response: Response):
 @app.post("/predict")
 async def predict(request: Request):
     """
-    Forward a prediction request to the next inference replica via
-    round-robin and return its response with routing metadata.
+    Forward a prediction request using the selected gateway strategy.
     """
     if router.endpoint_count == 0:
         raise HTTPException(
@@ -75,6 +75,9 @@ async def predict(request: Request):
 
     # Validate model run consistency if caller requested a specific run
     expected_run_id = request.headers.get("X-Model-Run-ID")
+    strategy = request.headers.get("X-Routing-Strategy", "round_robin").strip().lower()
+    if strategy not in ("round_robin", "weighted_round_robin"):
+        raise HTTPException(status_code=400, detail="Unsupported gateway routing strategy")
     active_run_id = router.model_run_id or MODEL_RUN_ID
     if expected_run_id and expected_run_id != active_run_id:
         raise HTTPException(
@@ -91,11 +94,12 @@ async def predict(request: Request):
     max_attempts = min(2, max(1, router.endpoint_count))
     last_error: Optional[Exception] = None
     target: Optional[str] = None
+    attempted: list[str] = []
     upstream_resp = None
 
     async with httpx.AsyncClient(timeout=UPSTREAM_TIMEOUT_S) as client:
         for attempt in range(max_attempts):
-            target = router.next_endpoint()
+            target = router.next_endpoint(strategy=strategy, exclude=attempted)
             if target is None:
                 raise HTTPException(
                     status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -103,6 +107,7 @@ async def predict(request: Request):
                 )
 
             url = f"{target}/predict"
+            attempted.append(target)
             try:
                 upstream_resp = await client.post(
                     url,
@@ -159,7 +164,7 @@ async def predict(request: Request):
 
     # Attach routing metadata under a separate key so model output is untouched
     upstream_data["gateway_meta"] = {
-        "routing_strategy": "round_robin",
+        "routing_strategy": strategy,
         "selected_replica": upstream_data.get("replica_id", target),
         "target_endpoint": target,
         "upstream_latency_ms": upstream_data.get("latency_ms"),

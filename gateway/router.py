@@ -15,6 +15,17 @@ INFERENCE_PORT = int(os.environ.get("INFERENCE_PORT", "8000"))
 DISCOVERY_INTERVAL_S = float(os.environ.get("DISCOVERY_INTERVAL_S", "10"))
 
 
+def _load_weights() -> List[int]:
+    raw = os.environ.get("WRR_WEIGHTS", "5,3,2")
+    try:
+        weights = [int(item.strip()) for item in raw.split(",")]
+    except (TypeError, ValueError):
+        raise ValueError("WRR_WEIGHTS must be comma-separated positive integers")
+    if not weights or any(weight <= 0 for weight in weights):
+        raise ValueError("WRR_WEIGHTS must contain only positive integers")
+    return weights
+
+
 class RoundRobinRouter:
     """
     Concurrency-safe round-robin router over dynamically discovered
@@ -25,6 +36,8 @@ class RoundRobinRouter:
         self._lock = threading.Lock()
         self._endpoints: List[str] = []
         self._index: int = 0
+        self._weights = _load_weights()
+        self._wrr_current: List[int] = []
         self._stop_event = threading.Event()
         self._discovery_thread: Optional[threading.Thread] = None
         self._model_run_id: Optional[str] = None
@@ -77,6 +90,7 @@ class RoundRobinRouter:
                     "Endpoints updated: %s -> %s", self._endpoints, ready_ips
                 )
                 self._endpoints = ready_ips
+                self._wrr_current = [0] * len(ready_ips)
                 # Reset index to stay within bounds
                 if self._endpoints:
                     self._index = self._index % len(self._endpoints)
@@ -108,14 +122,31 @@ class RoundRobinRouter:
 
     # -- routing ----------------------------------------------------------
 
-    def next_endpoint(self) -> Optional[str]:
-        """Return the next endpoint URL via round-robin, or None."""
+    def next_endpoint(self, strategy: str = "round_robin", exclude: Optional[List[str]] = None) -> Optional[str]:
+        """Return the next endpoint URL, optionally using smooth weighted round-robin."""
         with self._lock:
             if not self._endpoints:
                 return None
-            ip = self._endpoints[self._index % len(self._endpoints)]
-            self._index = (self._index + 1) % len(self._endpoints)
-            return f"http://{ip}:{INFERENCE_PORT}"
+            excluded = set(exclude or [])
+            count = len(self._endpoints)
+            weights = [self._weights[i] if i < len(self._weights) else 1 for i in range(count)]
+            if len(self._wrr_current) != count:
+                self._wrr_current = [0] * count
+            for _ in range(count):
+                if strategy == "weighted_round_robin":
+                    total = sum(weights)
+                    for i, weight in enumerate(weights):
+                        self._wrr_current[i] += weight
+                    index = max(range(count), key=lambda i: self._wrr_current[i])
+                    self._wrr_current[index] -= total
+                else:
+                    index = self._index % count
+                    self._index = (self._index + 1) % count
+                ip = self._endpoints[index]
+                url = f"http://{ip}:{INFERENCE_PORT}"
+                if url not in excluded:
+                    return url
+            return None
 
     @property
     def endpoints(self) -> List[str]:
@@ -126,6 +157,10 @@ class RoundRobinRouter:
     def endpoint_count(self) -> int:
         with self._lock:
             return len(self._endpoints)
+
+    @property
+    def weights(self) -> List[int]:
+        return list(self._weights)
 
     @property
     def model_run_id(self) -> Optional[str]:

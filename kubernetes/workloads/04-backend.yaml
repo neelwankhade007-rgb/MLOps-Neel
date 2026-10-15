@@ -70,6 +70,11 @@ spec:
                   key: MLFLOW_S3_ENDPOINT_URL
             - name: GATEWAY_URL
               value: "http://inference-gateway:8080"
+            - name: WRR_WEIGHTS
+              valueFrom:
+                configMapKeyRef:
+                  name: mlops-config
+                  key: WRR_WEIGHTS
           readinessProbe:
             tcpSocket:
               port: 8000

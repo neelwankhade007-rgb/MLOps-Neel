@@ -1,6 +1,6 @@
 # MLOps Inference Gateway
 
-Round-robin routing gateway for distributing prediction requests across inference replicas.
+Round-robin and weighted round-robin routing gateway for distributing prediction requests across inference replicas.
 
 ## Architecture
 
@@ -17,7 +17,7 @@ Frontend → Backend → Gateway → Inference Replicas (3x)
 - **Round-robin load balancing**: Distributes requests evenly across replicas
 - **Dynamic endpoint discovery**: Discovers replica IPs via headless DNS (`inference-service-headless.mlops.svc.cluster.local`)
 - **Automatic refresh**: Re-discovers endpoints every 10s to handle pod restarts
-- **Concurrency-safe**: Thread-safe round-robin selection
+- **Concurrency-safe**: Thread-safe round-robin and smooth weighted round-robin selection
 - **Health/readiness probes**: Kubernetes integration
 - **Timeout handling**: 10s upstream timeout with 504 response
 - **Error propagation**: Preserves upstream HTTP status codes (400, 503, etc.)
@@ -25,7 +25,7 @@ Frontend → Backend → Gateway → Inference Replicas (3x)
 
 ## Endpoints
 
-- `POST /predict` - Forward prediction to next replica via round-robin
+- `POST /predict` - Forward prediction to the next ready replica; backend selects `round_robin` or `weighted_round_robin` with `X-Routing-Strategy`
 - `GET /health` - Liveness probe
 - `GET /ready` - Readiness probe (503 if no replicas discovered)
 - `GET /replicas` - List discovered replica endpoints
@@ -90,6 +90,11 @@ GATEWAY_URL = os.environ.get("GATEWAY_URL", "http://inference-gateway:8080")
 # Backend predict endpoint forwards to gateway
 response = urllib.request.urlopen(f"{GATEWAY_URL}/predict", payload)
 ```
+
+Set `WRR_WEIGHTS` to comma-separated positive integers. The
+default is `5,3,2` for three replicas. Weights apply in the sorted order of the current
+ready endpoint list; unready endpoints are removed before assignment. Endpoints beyond the
+configured list receive weight `1`.
 
 ## Constraints
 

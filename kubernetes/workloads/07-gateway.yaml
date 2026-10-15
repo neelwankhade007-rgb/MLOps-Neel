@@ -32,6 +32,11 @@ spec:
               value: "8000"
             - name: DISCOVERY_INTERVAL_S
               value: "10"
+            - name: WRR_WEIGHTS
+              valueFrom:
+                configMapKeyRef:
+                  name: mlops-config
+                  key: WRR_WEIGHTS
           resources:
             requests:
               cpu: 50m

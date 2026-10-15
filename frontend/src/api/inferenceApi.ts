@@ -93,7 +93,25 @@ export interface TestTrafficResult {
   routing_strategy?: string;
 }
 
+export type RoutingStrategy = 'native' | 'round_robin' | 'weighted_round_robin';
+export interface RoutingStrategyState {
+  strategy: RoutingStrategy;
+  strategy_label: string;
+  supported_strategies: RoutingStrategy[];
+  wrr_weights: number[];
+}
+
 export const inferenceApi = {
+  getRoutingStrategy: async (): Promise<RoutingStrategyState> => {
+    const res = await apiClient.get<RoutingStrategyState>('/inference-monitoring/routing-strategy');
+    return res.data;
+  },
+
+  setRoutingStrategy: async (strategy: RoutingStrategy): Promise<RoutingStrategyState> => {
+    const res = await apiClient.put<RoutingStrategyState>('/inference-monitoring/routing-strategy', { strategy });
+    return res.data;
+  },
+
   getTelemetry: async (weights?: { lat: number; req: number; cpu: number; err: number }): Promise<TelemetrySnapshot> => {
     const params = weights
       ? { w_lat: weights.lat, w_req: weights.req, w_cpu: weights.cpu, w_err: weights.err }
