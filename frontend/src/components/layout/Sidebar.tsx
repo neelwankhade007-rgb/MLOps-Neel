@@ -14,6 +14,7 @@ import {
 import toast from 'react-hot-toast';
 import { useAuth } from '../../hooks/useAuth';
 import ThemeToggle from './ThemeToggle';
+import { getCurrentUsername } from '../../utils/auth';
 
 interface NavItemProps {
   to: string;
@@ -61,7 +62,7 @@ export const Sidebar: React.FC = () => {
     toast('Logged out');
   };
 
-  const username = 'Dr. Aris Vance';
+  const username = getCurrentUsername() || 'User';
 
   return (
     <aside className="w-60 bg-[#0B1120] text-slate-200 border-r border-slate-800/80 flex flex-col justify-between shrink-0 shadow-lg select-none z-30">
@@ -126,9 +127,6 @@ export const Sidebar: React.FC = () => {
             <div className="flex flex-col truncate">
               <span className="text-xs text-white font-medium truncate">
                 {username}
-              </span>
-              <span className="text-[10px] text-slate-400 font-mono truncate">
-                MLOps Lead
               </span>
             </div>
           </div>

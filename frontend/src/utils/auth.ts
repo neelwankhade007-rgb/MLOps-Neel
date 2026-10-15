@@ -2,6 +2,22 @@ export const getToken = (): string | null => {
   return localStorage.getItem('token');
 };
 
+export const getCurrentUsername = (): string | null => {
+  const token = getToken();
+  if (!token) return null;
+
+  try {
+    const encodedPayload = token.split('.')[1];
+    if (!encodedPayload) return null;
+    const base64Payload = encodedPayload.replace(/-/g, '+').replace(/_/g, '/');
+    const paddedPayload = base64Payload.padEnd(Math.ceil(base64Payload.length / 4) * 4, '=');
+    const payload = JSON.parse(atob(paddedPayload));
+    return typeof payload.sub === 'string' && payload.sub.trim() ? payload.sub : null;
+  } catch {
+    return null;
+  }
+};
+
 export const setToken = (token: string): void => {
   localStorage.setItem('token', token);
 };

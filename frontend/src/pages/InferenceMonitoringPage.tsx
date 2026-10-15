@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { inferenceApi } from '../api/inferenceApi';
 import type { TelemetrySnapshot, ReplicaTelemetry, RecentEvent, RoutingStrategy } from '../api/inferenceApi';
+import Header from '../components/layout/Header';
 
 // Helper: Generate SVG sparkline path from numeric array
 function generateSparkline(data: number[], width = 100, height = 24, pad = 2): string {
@@ -274,137 +275,100 @@ export const InferenceMonitoringPage: React.FC = () => {
   const hasActiveTraffic = summary.throughput_rps > 0;
 
   return (
-    <div className="w-full min-h-screen bg-[#F8FAFC] text-[#0B1C30] font-['Geist',system-ui,sans-serif] -m-8 md:-m-12 pb-24">
-      {/* ==================== SUB-HEADER / ENVIRONMENT BAR ==================== */}
-      <div className="h-12 bg-white border-b border-slate-200/80 px-6 sm:px-8 flex items-center justify-between shadow-xs sticky top-0 z-20">
-        {/* Breadcrumbs */}
-        <div className="flex items-center gap-2 text-xs text-slate-500">
-          <span className="hover:text-slate-900 cursor-pointer">Nexus MLOps</span>
-          <span className="text-slate-300">/</span>
-          <span className="hover:text-slate-900 cursor-pointer">Inference</span>
-          <span className="text-slate-300">/</span>
-          <span className="text-slate-900 font-semibold">Adaptive Load Balancing</span>
-        </div>
-
-        {/* Cluster Context & Controls */}
-        <div className="flex items-center gap-3">
-          <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-slate-100 text-slate-700 text-xs font-mono border border-slate-200">
-            <Server size={13} className="text-blue-600" />
-            <span>Minikube Cluster (local)</span>
-            <span className="text-slate-300">|</span>
-            <span className="text-slate-500">ns/mlops</span>
-          </div>
-
-          <div className="px-2 py-0.5 rounded bg-blue-50 border border-blue-200 text-blue-700 text-[10px] font-mono font-bold tracking-wider uppercase">
-            {`REAL TELEMETRY • ${isGatewayActive ? 'L7 GATEWAY' : 'K8S BASELINE'}`}
-          </div>
-
-          <div className="flex items-center gap-2 text-xs text-slate-500">
-            <span className="font-mono text-[11px] hidden md:inline">
-              Sync: {summary.last_sync_utc}
+    <div className="max-w-7xl mx-auto space-y-6">
+      <Header
+        category="Inference"
+        title="Adaptive Load Balancing"
+        subtitle="Monitor inference traffic, replica health, and routing performance across your cluster."
+        action={(
+          <div className="flex flex-wrap items-center gap-2.5">
+            <span className={`inline-flex items-center gap-2 px-2.5 py-1.5 rounded-lg border text-xs font-medium ${
+              syncStatus === 'stale'
+                ? 'bg-amber-50 text-amber-700 border-amber-200'
+                : 'bg-white text-slate-600 border-slate-200'
+            }`}>
+              <span className={`h-2 w-2 rounded-full ${syncStatus === 'stale' ? 'bg-amber-500' : 'bg-emerald-500'}`} />
+              {syncStatus === 'stale' ? 'Telemetry stale' : 'Live telemetry'}
             </span>
-
-            {syncStatus === 'stale' && (
-              <span className="px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200 text-[10px] font-mono font-semibold">
-                Stale
-              </span>
-            )}
-
+            <span className="hidden xl:inline text-xs text-slate-500">
+              Updated {summary.last_sync_utc}
+            </span>
             <button
               onClick={() => loadTelemetry(true)}
               disabled={refreshing}
-              className={`p-1.5 rounded-md text-slate-600 hover:text-slate-900 hover:bg-slate-100 transition-colors ${
-                refreshing ? 'animate-spin text-blue-600' : ''
-              }`}
-              title="Manual Sync"
+              className={`inline-flex items-center justify-center p-2 rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 disabled:opacity-60 ${refreshing ? 'animate-spin text-blue-600' : ''}`}
+              title="Refresh telemetry"
+              aria-label="Refresh telemetry"
               type="button"
             >
-              <RotateCw size={15} />
+              <RotateCw size={16} />
             </button>
-
             <select
               value={refreshInterval}
               onChange={(e) => setRefreshInterval(Number(e.target.value))}
-              className="px-2 py-1 rounded text-[11px] font-mono font-medium bg-slate-100 text-slate-700 border border-slate-200 cursor-pointer focus:outline-none"
+              className="px-2.5 py-2 rounded-lg text-xs font-medium bg-white text-slate-700 border border-slate-200 cursor-pointer focus:outline-none focus:ring-2 focus:ring-blue-500/20"
               title="Auto-refresh interval"
+              aria-label="Auto-refresh interval"
             >
-              <option value={2000}>Auto 2s</option>
-              <option value={5000}>Auto 5s</option>
-              <option value={10000}>Auto 10s</option>
+              <option value={2000}>Every 2 seconds</option>
+              <option value={5000}>Every 5 seconds</option>
+              <option value={10000}>Every 10 seconds</option>
               <option value={0}>Paused</option>
             </select>
           </div>
-        </div>
-      </div>
-
-      <div className="max-w-7xl mx-auto px-6 sm:px-8 py-6 space-y-6">
-        {/* ==================== ACTION BAR & TITLE ==================== */}
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-          <div>
-            <div className="flex items-center gap-2.5 mb-1">
-              <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-slate-900">
-                Adaptive Load Balancing
-              </h1>
-              <span className="px-2 py-0.5 rounded bg-blue-100 text-blue-800 font-mono text-xs font-semibold uppercase tracking-wider">
-                K8S-BASELINE-v1.0
-              </span>
-            </div>
-            <p className="text-sm text-slate-600 max-w-3xl">
-              Monitor real-time client inference traffic, inspect Kubernetes serving pod telemetry, and dynamically benchmark composite penalty scores across heterogenous backends.
-            </p>
+        )}
+      />
+      <div className="space-y-6">
+        <div className="flex flex-wrap items-center justify-end gap-2.5">
+          <div className="flex items-center bg-white border border-slate-200 rounded-lg p-0.5 shadow-sm">
+            <button
+              onClick={handleSendTestTraffic}
+              disabled={isSendingTest}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-md bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium transition-colors disabled:opacity-60"
+            >
+              {isSendingTest ? (
+                <RotateCw size={15} className="animate-spin" />
+              ) : (
+                <Play size={15} fill="currentColor" />
+              )}
+              <span>Send test traffic</span>
+            </button>
+            <select
+              value={testCount}
+              onChange={(e) => setTestCount(Number(e.target.value))}
+              className="text-sm bg-transparent border-0 px-2 py-2 text-slate-700 focus:ring-0 cursor-pointer"
+              title="Number of requests"
+              aria-label="Number of test requests"
+            >
+              <option value={1}>1 request</option>
+              <option value={5}>5 requests</option>
+              <option value={10}>10 requests</option>
+              <option value={20}>20 requests</option>
+            </select>
           </div>
 
-          {/* Action Group */}
-          <div className="flex flex-wrap items-center gap-2.5">
-            <div className="flex items-center bg-white border border-slate-200 rounded-lg p-0.5 shadow-xs">
-              <button
-                onClick={handleSendTestTraffic}
-                disabled={isSendingTest}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium transition-colors shadow-xs"
-              >
-                {isSendingTest ? (
-                  <RotateCw size={14} className="animate-spin" />
-                ) : (
-                  <Play size={14} fill="currentColor" />
-                )}
-                <span>Send Test Traffic</span>
-              </button>
-              <select
-                value={testCount}
-                onChange={(e) => setTestCount(Number(e.target.value))}
-                className="text-xs font-mono bg-transparent border-0 px-2 py-1 text-slate-700 focus:ring-0 cursor-pointer"
-                title="Number of requests"
-              >
-                <option value={1}>1 req</option>
-                <option value={5}>5 reqs</option>
-                <option value={10}>10 reqs</option>
-                <option value={20}>20 reqs</option>
-              </select>
-            </div>
+          <button
+            onClick={() => {
+              document.getElementById('objective-tuning-panel')?.scrollIntoView({ behavior: 'smooth' });
+            }}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 text-sm font-medium shadow-sm transition-colors"
+          >
+            <Sliders size={15} className="text-slate-400" />
+            <span>Configure weights</span>
+          </button>
 
-            <button
-              onClick={() => {
-                document.getElementById('objective-tuning-panel')?.scrollIntoView({ behavior: 'smooth' });
-              }}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 text-xs font-medium shadow-xs transition-colors"
-            >
-              <Sliders size={14} className="text-slate-400" />
-              <span>Configure Weights</span>
-            </button>
-
-            <button
-              onClick={handleExportJson}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 text-xs font-medium shadow-xs transition-colors"
-              title="Export Telemetry JSON"
-            >
-              <Download size={14} className="text-slate-400" />
-              <span>Export</span>
-            </button>
-          </div>
+          <button
+            onClick={handleExportJson}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 text-sm font-medium shadow-sm transition-colors"
+            title="Export telemetry JSON"
+          >
+            <Download size={15} className="text-slate-400" />
+            <span>Export</span>
+          </button>
         </div>
 
         {/* ==================== SLIM INFRASTRUCTURE STATUS RIBBON ==================== */}
-        <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-2.5 rounded-lg bg-white border border-slate-200 shadow-xs text-xs">
+        <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-2.5 rounded-lg bg-white border border-slate-200 shadow-sm text-xs">
           <div className="flex flex-wrap items-center gap-6 text-slate-600">
             <div className="flex items-center gap-2">
               <span className="relative flex h-2 w-2">
@@ -465,9 +429,9 @@ export const InferenceMonitoringPage: React.FC = () => {
         {/* ==================== SECTION 1: 5 KPI SUMMARY CARDS ==================== */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
           {/* KPI 1: Throughput */}
-          <div className="p-4 rounded-xl bg-white border border-slate-200 shadow-xs flex flex-col justify-between">
+          <div className="p-4 rounded-xl bg-white border border-slate-200 shadow-sm flex flex-col justify-between">
             <div className="flex items-center justify-between text-slate-500">
-              <span className="text-[11px] font-bold uppercase tracking-wider">THROUGHPUT</span>
+              <span className="text-xs font-semibold">Throughput</span>
               <Zap size={16} className="text-slate-400" />
             </div>
             <div className="my-2">
@@ -506,9 +470,9 @@ export const InferenceMonitoringPage: React.FC = () => {
           </div>
 
           {/* KPI 2: P95 Latency */}
-          <div className="p-4 rounded-xl bg-white border border-slate-200 shadow-xs flex flex-col justify-between">
+          <div className="p-4 rounded-xl bg-white border border-slate-200 shadow-sm flex flex-col justify-between">
             <div className="flex items-center justify-between text-slate-500">
-              <span className="text-[11px] font-bold uppercase tracking-wider">P95 LATENCY</span>
+              <span className="text-xs font-semibold">P95 latency</span>
               <Clock size={16} className="text-slate-400" />
             </div>
             <div className="my-2">
@@ -549,9 +513,9 @@ export const InferenceMonitoringPage: React.FC = () => {
           </div>
 
           {/* KPI 3: Error Rate */}
-          <div className="p-4 rounded-xl bg-white border border-slate-200 shadow-xs flex flex-col justify-between">
+          <div className="p-4 rounded-xl bg-white border border-slate-200 shadow-sm flex flex-col justify-between">
             <div className="flex items-center justify-between text-slate-500">
-              <span className="text-[11px] font-bold uppercase tracking-wider">ERROR RATE</span>
+              <span className="text-xs font-semibold">Error rate</span>
               <AlertTriangle size={16} className="text-slate-400" />
             </div>
             <div className="my-2">
@@ -588,9 +552,9 @@ export const InferenceMonitoringPage: React.FC = () => {
           </div>
 
           {/* KPI 4: Active Replicas */}
-          <div className="p-4 rounded-xl bg-white border border-slate-200 shadow-xs flex flex-col justify-between">
+          <div className="p-4 rounded-xl bg-white border border-slate-200 shadow-sm flex flex-col justify-between">
             <div className="flex items-center justify-between text-slate-500">
-              <span className="text-[11px] font-bold uppercase tracking-wider">ACTIVE REPLICAS</span>
+              <span className="text-xs font-semibold">Active replicas</span>
               <Server size={16} className="text-slate-400" />
             </div>
             <div className="my-2">
@@ -629,9 +593,9 @@ export const InferenceMonitoringPage: React.FC = () => {
           </div>
 
           {/* KPI 5: Gateway Dispatch Overhead */}
-          <div className="p-4 rounded-xl bg-white border border-slate-200 shadow-xs flex flex-col justify-between">
+          <div className="p-4 rounded-xl bg-white border border-slate-200 shadow-sm flex flex-col justify-between">
             <div className="flex items-center justify-between text-slate-500">
-              <span className="text-[11px] font-bold uppercase tracking-wider">GATEWAY DISPATCH</span>
+              <span className="text-xs font-semibold">Gateway dispatch</span>
               <Cpu size={16} className="text-slate-400" />
             </div>
             <div className="my-2">
@@ -666,8 +630,8 @@ export const InferenceMonitoringPage: React.FC = () => {
           </div>
         </div>
 
-        {/* ==================== SECTION 2: LIVE INFERENCE ROUTING TOPOLOGY ==================== */}
-        <div className="w-full p-5 sm:p-6 rounded-xl bg-white border border-slate-200 shadow-xs">
+        {/* ==================== SECTION 2: Live inference routing topology ==================== */}
+        <div className="w-full p-5 sm:p-6 rounded-xl bg-white border border-slate-200 shadow-sm">
           {/* Topology Header */}
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pb-4 mb-5 border-b border-slate-100">
             <div className="flex items-center gap-3">
@@ -676,12 +640,12 @@ export const InferenceMonitoringPage: React.FC = () => {
                   <Layers size={18} />
                 </div>
                 <h2 className="text-base sm:text-lg font-bold text-slate-900">
-                  Live Inference Routing Topology
+                  Live inference routing topology
                 </h2>
               </div>
               <div className="flex items-center p-0.5 rounded-lg bg-slate-100 text-xs">
-                <button className="px-2.5 py-1 rounded bg-white shadow-xs text-slate-900 font-semibold">
-                  Live Node Topology
+                <button className="px-2.5 py-1 rounded bg-white shadow-sm text-slate-900 font-semibold">
+                  Live node topology
                 </button>
                 <button
                   onClick={() => toast('Graph Matrix view available in cluster monitoring expansion.')}
@@ -712,9 +676,9 @@ export const InferenceMonitoringPage: React.FC = () => {
             <div className="min-w-[940px] grid grid-cols-12 gap-5 items-center">
               {/* STEP 1: Incoming Traffic Column (3 Cols) */}
               <div className="col-span-3 flex flex-col gap-3">
-                <div className="p-4 rounded-xl bg-white border border-slate-200 shadow-xs relative">
+                <div className="p-4 rounded-xl bg-white border border-slate-200 shadow-sm relative">
                   <div className="absolute -top-2.5 left-3 px-2 py-0.5 rounded bg-slate-900 text-white font-mono text-[10px] font-semibold uppercase">
-                    INGRESS PIPELINE
+                    Ingress pipeline
                   </div>
                   <div className="flex items-center justify-between mb-2 pt-1">
                     <span className="font-bold text-slate-900 text-sm">Client Traffic</span>
@@ -863,7 +827,7 @@ export const InferenceMonitoringPage: React.FC = () => {
                 {replicas.map((rep) => (
                   <div
                     key={rep.name}
-                    className="p-3 rounded-xl bg-white border border-slate-200 shadow-xs hover:border-slate-300 transition-all"
+                    className="p-3 rounded-xl bg-white border border-slate-200 shadow-sm hover:border-slate-300 transition-all"
                   >
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
@@ -947,7 +911,7 @@ export const InferenceMonitoringPage: React.FC = () => {
         {/* ==================== SECTION 3: ROUTING STRATEGIES & OBJECTIVE WEIGHT TUNING ==================== */}
         <div id="objective-tuning-panel" className="grid grid-cols-1 xl:grid-cols-12 gap-5">
           {/* Strategy Selection (5 Cols) */}
-          <div className="xl:col-span-5 p-5 rounded-xl bg-white border border-slate-200 shadow-xs flex flex-col justify-between">
+          <div className="xl:col-span-5 p-5 rounded-xl bg-white border border-slate-200 shadow-sm flex flex-col justify-between">
             <div>
               <div className="flex items-center justify-between mb-2">
                 <h3 className="text-base font-bold text-slate-900">Routing Strategies</h3>
@@ -1087,14 +1051,14 @@ export const InferenceMonitoringPage: React.FC = () => {
           </div>
 
           {/* Weight Tuning & Safety Parameters (7 Cols) - LABELED AS SIMULATION PREVIEW */}
-          <div className="xl:col-span-7 p-5 rounded-xl bg-white border border-slate-200 shadow-xs flex flex-col justify-between">
+          <div className="xl:col-span-7 p-5 rounded-xl bg-white border border-slate-200 shadow-sm flex flex-col justify-between">
             <div>
               <div className="flex items-center justify-between mb-2">
                 <div>
                   <div className="flex items-center gap-2">
                     <h3 className="text-base font-bold text-slate-900">Objective Weight Tuning (Simulation Preview)</h3>
                     <span className="px-2 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200 font-mono text-[9px] font-bold">
-                      SIMULATION ONLY • ZERO LIVE IMPACT
+                      Simulation only · no live impact
                     </span>
                   </div>
                   <span className="text-xs text-slate-500">
@@ -1259,7 +1223,7 @@ export const InferenceMonitoringPage: React.FC = () => {
         {/* ==================== SECTION 4: REAL-TIME OBSERVABILITY GRID (2x2) ==================== */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
           {/* CHART A: Latency Over Time - REAL OBSERVATIONS */}
-          <div className="p-5 rounded-xl bg-white border border-slate-200 shadow-xs flex flex-col justify-between">
+          <div className="p-5 rounded-xl bg-white border border-slate-200 shadow-sm flex flex-col justify-between">
             <div className="flex items-center justify-between mb-3">
               <div>
                 <div className="flex items-center gap-2">
@@ -1276,7 +1240,7 @@ export const InferenceMonitoringPage: React.FC = () => {
                     key={w}
                     onClick={() => setChartTimeWindow(w)}
                     className={`px-2 py-0.5 rounded font-medium transition-all ${
-                      chartTimeWindow === w ? 'bg-white shadow-xs text-slate-900' : 'text-slate-500 hover:text-slate-800'
+                      chartTimeWindow === w ? 'bg-white shadow-sm text-slate-900' : 'text-slate-500 hover:text-slate-800'
                     }`}
                   >
                     {w}
@@ -1370,7 +1334,7 @@ export const InferenceMonitoringPage: React.FC = () => {
           </div>
 
           {/* CHART B: Request Distribution by Replica - OBSERVED DATA */}
-          <div className="p-5 rounded-xl bg-white border border-slate-200 shadow-xs flex flex-col justify-between">
+          <div className="p-5 rounded-xl bg-white border border-slate-200 shadow-sm flex flex-col justify-between">
             <div className="flex items-center justify-between mb-3">
               <div>
                 <h3 className="font-bold text-slate-900 text-sm">Request Distribution by Replica</h3>
@@ -1439,7 +1403,7 @@ export const InferenceMonitoringPage: React.FC = () => {
           </div>
 
           {/* CHART C: Pod Compute Saturation - REAL METRICS SERVER DATA */}
-          <div className="p-5 rounded-xl bg-white border border-slate-200 shadow-xs flex flex-col justify-between">
+          <div className="p-5 rounded-xl bg-white border border-slate-200 shadow-sm flex flex-col justify-between">
             <div className="flex items-center justify-between mb-3">
               <div>
                 <h3 className="font-bold text-slate-900 text-sm">Pod Compute Saturation</h3>
@@ -1458,7 +1422,7 @@ export const InferenceMonitoringPage: React.FC = () => {
                     {/* CPU Bar */}
                     {rep.cpu_pct != null ? (
                       <div
-                        className="w-7 rounded-t flex items-center justify-center text-white font-mono text-[10px] font-bold shadow-xs transition-all"
+                        className="w-7 rounded-t flex items-center justify-center text-white font-mono text-[10px] font-bold shadow-sm transition-all"
                         style={{
                           height: `${Math.max(12, Math.min(100, rep.cpu_pct))}%`,
                           backgroundColor: rep.color
@@ -1475,7 +1439,7 @@ export const InferenceMonitoringPage: React.FC = () => {
                     {/* Memory Bar */}
                     {rep.mem_pct != null ? (
                       <div
-                        className="w-7 bg-slate-300 rounded-t flex items-center justify-center text-slate-800 font-mono text-[10px] font-bold shadow-xs transition-all"
+                        className="w-7 bg-slate-300 rounded-t flex items-center justify-center text-slate-800 font-mono text-[10px] font-bold shadow-sm transition-all"
                         style={{
                           height: `${Math.max(12, Math.min(100, rep.mem_pct))}%`
                         }}
@@ -1509,7 +1473,7 @@ export const InferenceMonitoringPage: React.FC = () => {
           </div>
 
           {/* CHART D: Throughput & Error Dual-Axis - DYNAMICALLY PLOTTED */}
-          <div className="p-5 rounded-xl bg-white border border-slate-200 shadow-xs flex flex-col justify-between">
+          <div className="p-5 rounded-xl bg-white border border-slate-200 shadow-sm flex flex-col justify-between">
             <div className="flex items-center justify-between mb-3">
               <div>
                 <h3 className="font-bold text-slate-900 text-sm">Throughput vs Transient Errors</h3>
@@ -1565,7 +1529,7 @@ export const InferenceMonitoringPage: React.FC = () => {
         {/* ==================== SECTION 5: REPLICA DIAGNOSTICS & EXPERIMENT CONTROL ==================== */}
         <div className="grid grid-cols-1 xl:grid-cols-12 gap-5">
           {/* Left Column (8 Cols): Diagnostics Table */}
-          <div className="xl:col-span-8 p-5 rounded-xl bg-white border border-slate-200 shadow-xs flex flex-col justify-between">
+          <div className="xl:col-span-8 p-5 rounded-xl bg-white border border-slate-200 shadow-sm flex flex-col justify-between">
             <div>
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4">
                 <div>
@@ -1584,17 +1548,17 @@ export const InferenceMonitoringPage: React.FC = () => {
               <div className="overflow-x-auto">
                 <table className="w-full text-left text-xs">
                   <thead>
-                    <tr className="text-[11px] font-bold uppercase tracking-wider text-slate-500 bg-slate-50 border-b border-slate-200">
-                      <th className="py-2.5 px-3">POD REPLICA</th>
-                      <th className="py-2.5 px-3">POD IP</th>
-                      <th className="py-2.5 px-3">STATUS</th>
-                      <th className="py-2.5 px-3">SERVED</th>
-                      <th className="py-2.5 px-3">ACTIVE</th>
+                    <tr className="text-xs font-semibold text-slate-500 bg-slate-50 border-b border-slate-200">
+                      <th className="py-2.5 px-3">Pod replica</th>
+                      <th className="py-2.5 px-3">Pod IP</th>
+                      <th className="py-2.5 px-3">Status</th>
+                      <th className="py-2.5 px-3">Served</th>
+                      <th className="py-2.5 px-3">Active</th>
                       <th className="py-2.5 px-3">P95</th>
                       <th className="py-2.5 px-3">CPU</th>
-                      <th className="py-2.5 px-3">MEMORY</th>
+                      <th className="py-2.5 px-3">Memory</th>
                       <th className="py-2.5 px-3">SCORE (PREVIEW)</th>
-                      <th className="py-2.5 px-3 text-right">ACTION</th>
+                      <th className="py-2.5 px-3 text-right">Action</th>
                     </tr>
                   </thead>
                   <tbody className="font-mono divide-y divide-slate-100">
@@ -1662,7 +1626,7 @@ export const InferenceMonitoringPage: React.FC = () => {
           </div>
 
           {/* Right Column (4 Cols): Benchmark / Traffic Injection Control */}
-          <div className="xl:col-span-4 p-5 rounded-xl bg-white border border-slate-200 shadow-xs flex flex-col justify-between">
+          <div className="xl:col-span-4 p-5 rounded-xl bg-white border border-slate-200 shadow-sm flex flex-col justify-between">
             <div>
               <div className="flex items-center justify-between mb-2">
                 <div className="flex items-center gap-2">
@@ -1674,7 +1638,7 @@ export const InferenceMonitoringPage: React.FC = () => {
                     ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
                     : 'bg-blue-50 text-blue-700 border-blue-200'
                 }`}>
-                  {isGatewayActive ? 'L7 GATEWAY DISPATCH' : 'REAL K8S DISPATCH'}
+                  {isGatewayActive ? 'L7 gateway dispatch' : 'Kubernetes service dispatch'}
                 </span>
               </div>
               <p className="text-xs text-slate-500 mb-4">
@@ -1733,7 +1697,7 @@ export const InferenceMonitoringPage: React.FC = () => {
               <button
                 onClick={handleSendTestTraffic}
                 disabled={isSendingTest}
-                className="w-full py-2.5 px-4 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-medium text-xs flex items-center justify-center gap-2 shadow-xs transition-colors"
+                className="w-full py-2.5 px-4 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-medium text-xs flex items-center justify-center gap-2 shadow-sm transition-colors"
               >
                 {isSendingTest ? (
                   <>
@@ -1752,7 +1716,7 @@ export const InferenceMonitoringPage: React.FC = () => {
         </div>
 
         {/* ==================== SECTION 6: REAL-TIME REQUEST ACTIVITY LOG ==================== */}
-        <div className="w-full p-5 sm:p-6 rounded-xl bg-white border border-slate-200 shadow-xs">
+        <div className="w-full p-5 sm:p-6 rounded-xl bg-white border border-slate-200 shadow-sm">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
             <div>
               <h3 className="text-base font-bold text-slate-900">Real-Time Request Activity & Ingress Log</h3>
@@ -1790,14 +1754,14 @@ export const InferenceMonitoringPage: React.FC = () => {
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs">
               <thead>
-                <tr className="text-[11px] font-bold uppercase tracking-wider text-slate-500 bg-slate-50 border-b border-slate-200">
-                  <th className="py-2 px-3">TIMESTAMP</th>
-                  <th className="py-2 px-3">REQUEST ID</th>
-                  <th className="py-2 px-3">SERVED BY POD</th>
-                  <th className="py-2 px-3">POD IP / HOSTNAME</th>
-                  <th className="py-2 px-3">ROUTING MECHANISM</th>
-                  <th className="py-2 px-3">OBSERVED LATENCY</th>
-                  <th className="py-2 px-3 text-right">HTTP STATUS</th>
+                <tr className="text-xs font-semibold text-slate-500 bg-slate-50 border-b border-slate-200">
+                  <th className="py-2 px-3">Timestamp</th>
+                  <th className="py-2 px-3">Request ID</th>
+                  <th className="py-2 px-3">Served by pod</th>
+                  <th className="py-2 px-3">Pod IP / hostname</th>
+                  <th className="py-2 px-3">Routing mechanism</th>
+                  <th className="py-2 px-3">Observed latency</th>
+                  <th className="py-2 px-3 text-right">HTTP status</th>
                 </tr>
               </thead>
               <tbody className="font-mono divide-y divide-slate-100">
@@ -1869,7 +1833,7 @@ export const InferenceMonitoringPage: React.FC = () => {
         </div>
 
         {/* ==================== SECTION 7: PROMETHEUS & GRAFANA STATUS ==================== */}
-        <div className="w-full p-5 rounded-xl bg-slate-900 text-white shadow-xs">
+        <div className="w-full p-5 rounded-xl bg-slate-900 text-white shadow-sm">
           <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
             <div>
               <div className="flex items-center gap-2.5 mb-1">
