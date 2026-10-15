@@ -1,8 +1,17 @@
 # Nexus MLOps setup guide
 
-Nexus MLOps is a web app for uploading datasets, training and registering models, and sending predictions. The repository includes a React frontend, a FastAPI backend, PostgreSQL, MinIO, MLflow, and a separate inference service with a round-robin gateway.
+Nexus MLOps is a web app for uploading datasets, training and registering models, and sending predictions. The repository includes a React frontend, a FastAPI backend, PostgreSQL, MinIO, MLflow, and a separate inference service with a gateway that supports native Kubernetes routing, round robin, weighted round robin, and adaptive routing.
 
-**Current prediction routing:** the backend sends prediction requests to `GATEWAY_URL` (default `http://inference-gateway:8080`). The gateway rotates requests across ready inference replicas. `backend/routing.py` contains a native/round-robin strategy selector, but the prediction endpoint does not call it; changing `DEFAULT_ROUTING_STRATEGY` does not switch live traffic.
+## Prediction routing
+
+Choose a routing strategy from **Inference → Adaptive Load Balancing**. The backend applies that selection to prediction requests; native routing uses the Kubernetes inference Service, while the other strategies send requests through `GATEWAY_URL` (default `http://inference-gateway:8080`). Gateway strategies select only ready replicas discovered through the inference headless Service. On a connection failure, the gateway makes one bounded attempt to fail over to another ready replica.
+
+- **Native Kubernetes Service:** sends traffic to the inference ClusterIP and leaves replica selection to Kubernetes.
+- **Round Robin:** the gateway rotates requests evenly across ready replicas.
+- **Weighted Round Robin:** the gateway uses smooth weighted rotation. Configure positive integer weights with `WRR_WEIGHTS`, as comma-separated values. The default is `5,3,2`.
+- **Adaptive Dynamic Routing:** the gateway selects the healthy replica with the lowest composite penalty, using observed latency (40%), in-flight requests (30%), CPU utilization (20%), and recent errors (10%). CPU readings come from Metrics Server and refresh every five seconds by default. When a signal is unavailable, Adaptive omits it and renormalizes the remaining weights. The gateway needs the namespace-scoped read-only permissions in `kubernetes/config/04-gateway-rbac.yaml` to read pod and pod-metrics data.
+
+The monitoring page shows replica health, routing activity, latency, errors, and resource metrics. Its **Objective Weight Tuning** panel is a simulation preview; changing those sliders does not change the fixed weights used by live Adaptive routing. Strategy selection is held in backend process memory and returns to `DEFAULT_ROUTING_STRATEGY` after a backend restart; the default is `round_robin`.
 
 ## Tech stack
 
