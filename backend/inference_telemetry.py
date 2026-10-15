@@ -10,7 +10,7 @@ from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 from collections import deque
 from typing import Dict, Any, List, Optional
-from routing import routing_config, STRATEGY_NATIVE, STRATEGY_WEIGHTED_ROUND_ROBIN
+from routing import routing_config, STRATEGY_NATIVE, STRATEGY_WEIGHTED_ROUND_ROBIN, STRATEGY_ADAPTIVE
 
 # Constants
 K8S_TOKEN_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/token"
@@ -196,11 +196,12 @@ class TelemetryAggregator:
                     if data.get("status") == "ready" and active_strategy != STRATEGY_NATIVE:
                         label = routing_config.get_strategy_label()
                         wrr_weights = data.get("wrr_weights", routing_config.to_dict()["wrr_weights"])
-                        strategy_detail = (
-                            f"weighted distribution ({':'.join(map(str, wrr_weights))})"
-                            if active_strategy == STRATEGY_WEIGHTED_ROUND_ROBIN
-                            else "equal distribution"
-                        )
+                        if active_strategy == STRATEGY_WEIGHTED_ROUND_ROBIN:
+                            strategy_detail = f"weighted distribution ({':'.join(map(str, wrr_weights))})"
+                        elif active_strategy == STRATEGY_ADAPTIVE:
+                            strategy_detail = "lowest composite penalty using latency, active requests, CPU, and errors"
+                        else:
+                            strategy_detail = "equal distribution"
                         return {
                             "is_active": True,
                             "strategy": label,

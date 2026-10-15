@@ -8,6 +8,7 @@ from routing import (
     STRATEGY_NATIVE,
     STRATEGY_ROUND_ROBIN,
     STRATEGY_WEIGHTED_ROUND_ROBIN,
+    STRATEGY_ADAPTIVE,
     routing_config,
 )
 
@@ -20,8 +21,10 @@ def test_strategy_config_switches_between_all_routing_modes():
     assert config.get_target_url()[1] == STRATEGY_ROUND_ROBIN
     assert config.set_strategy("wrr") == STRATEGY_WEIGHTED_ROUND_ROBIN
     assert config.get_target_url()[1] == STRATEGY_WEIGHTED_ROUND_ROBIN
+    assert config.set_strategy("adaptive dynamic routing") == STRATEGY_ADAPTIVE
+    assert config.get_target_url()[1] == STRATEGY_ADAPTIVE
     assert config.to_dict()["supported_strategies"] == [
-        STRATEGY_NATIVE, STRATEGY_ROUND_ROBIN, STRATEGY_WEIGHTED_ROUND_ROBIN
+        STRATEGY_NATIVE, STRATEGY_ROUND_ROBIN, STRATEGY_WEIGHTED_ROUND_ROBIN, STRATEGY_ADAPTIVE
     ]
 
 
@@ -66,6 +69,12 @@ def test_strategy_api_requires_authentication_and_allows_authenticated_switching
         )
         assert response.status_code == 200
         assert response.json()["strategy"] == STRATEGY_WEIGHTED_ROUND_ROBIN
+        adaptive = client.put(
+            "/api/v1/inference-monitoring/routing-strategy",
+            json={"strategy": STRATEGY_ADAPTIVE},
+        )
+        assert adaptive.status_code == 200
+        assert adaptive.json()["strategy"] == STRATEGY_ADAPTIVE
         invalid = client.put(
             "/api/v1/inference-monitoring/routing-strategy", json={"strategy": "unknown"}
         )

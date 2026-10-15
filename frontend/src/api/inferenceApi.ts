@@ -93,7 +93,7 @@ export interface TestTrafficResult {
   routing_strategy?: string;
 }
 
-export type RoutingStrategy = 'native' | 'round_robin' | 'weighted_round_robin';
+export type RoutingStrategy = 'native' | 'round_robin' | 'weighted_round_robin' | 'adaptive';
 export interface RoutingStrategyState {
   strategy: RoutingStrategy;
   strategy_label: string;

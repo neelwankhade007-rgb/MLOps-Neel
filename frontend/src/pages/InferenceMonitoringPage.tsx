@@ -237,12 +237,14 @@ export const InferenceMonitoringPage: React.FC = () => {
 
   const isGatewayActive = activeStrategy !== 'native';
   const isWeightedRoundRobin = activeStrategy === 'weighted_round_robin';
+  const isAdaptiveRouting = activeStrategy === 'adaptive';
   const activeStrategyTitle = isWeightedRoundRobin
     ? 'Weighted Round Robin'
+    : isAdaptiveRouting ? 'Adaptive Dynamic Routing'
     : activeStrategy === 'round_robin' ? 'Round Robin' : 'Native Kubernetes Service';
   const gatewayMechanism = isWeightedRoundRobin
     ? `L7 Weighted Round Robin (${wrrWeights.join(':')})`
-    : 'L7 Round Robin';
+    : isAdaptiveRouting ? 'L7 Adaptive Dynamic Routing (40/30/20/10 penalty score)' : 'L7 Round Robin';
 
   const replicas: ReplicaTelemetry[] = telemetry?.replicas || [];
   const recentEvents: RecentEvent[] = telemetry?.recent_events || [];
@@ -1044,23 +1046,25 @@ export const InferenceMonitoringPage: React.FC = () => {
                   </div>
                 </label>
 
-                {/* 4. Adaptive Multi-Signal - RESEARCH PREVIEW */}
-                <label className="flex items-start gap-3 p-3 rounded-lg bg-slate-50 border border-slate-200 opacity-60 cursor-not-allowed">
+                {/* 4. Adaptive Multi-Signal */}
+                <label className={`flex items-start gap-3 p-3 rounded-lg ${activeStrategy === 'adaptive' ? 'bg-violet-50/60 border-2 border-violet-600' : 'bg-slate-50 border border-slate-200'}`}>
                   <input
                     type="radio"
                     name="strategy"
-                    disabled
+                    checked={activeStrategy === 'adaptive'}
+                    onChange={() => handleRoutingStrategyChange('adaptive')}
+                    disabled={changingStrategy}
                     className="mt-0.5 text-slate-400 focus:ring-0"
                   />
                   <div className="flex flex-col">
                     <div className="flex items-center gap-1.5">
                       <span className="text-xs font-bold text-slate-700">Adaptive Dynamic Routing</span>
-                      <span className="px-1.5 py-0.2 rounded bg-slate-200 text-slate-600 font-mono text-[9px] font-semibold">
-                        RESEARCH PREVIEW
+                      <span className={`px-1.5 py-0.2 rounded font-mono text-[9px] font-semibold ${activeStrategy === 'adaptive' ? 'bg-violet-600 text-white' : 'bg-slate-200 text-slate-600'}`}>
+                        {activeStrategy === 'adaptive' ? 'ACTIVE ROUTING' : 'AVAILABLE'}
                       </span>
                     </div>
                     <span className="text-[11px] text-slate-500 mt-0.5">
-                      Prospective multi-signal cost optimization balancing latency, CPU load, and queue depth.
+                      Chooses the lowest-scoring healthy replica using latency, in-flight requests, CPU, and recent errors (40/30/20/10).
                     </span>
                   </div>
                 </label>
@@ -1075,7 +1079,7 @@ export const InferenceMonitoringPage: React.FC = () => {
                 <span>
                   <strong>{isGatewayActive ? 'Custom Gateway Active:' : 'Native Baseline Active:'}</strong>{' '}
                   {isGatewayActive
-                    ? `Inference traffic is dispatched via the user-space ${activeStrategyTitle} gateway${isWeightedRoundRobin ? ` with weights ${wrrWeights.join(':')}` : ''}.`
+                    ? `Inference traffic is dispatched via the user-space ${activeStrategyTitle} gateway${isWeightedRoundRobin ? ` with weights ${wrrWeights.join(':')}` : isAdaptiveRouting ? ' with live replica signals and 40/30/20/10 objective weights' : ''}.`
                     : 'Routing decisions are made solely by native Kubernetes ClusterIP iptables. Alternative strategies are displayed for evaluation comparison.'}
                 </span>
               </div>

@@ -15,6 +15,7 @@ spec:
       labels:
         app: inference-gateway
     spec:
+      serviceAccountName: inference-gateway-sa
       initContainers:
         - name: wait-for-inference
           image: busybox
@@ -37,6 +38,11 @@ spec:
                 configMapKeyRef:
                   name: mlops-config
                   key: WRR_WEIGHTS
+            - name: ADAPTIVE_METRICS_INTERVAL_S
+              valueFrom:
+                configMapKeyRef:
+                  name: mlops-config
+                  key: ADAPTIVE_METRICS_INTERVAL_S
           resources:
             requests:
               cpu: 50m

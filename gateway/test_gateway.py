@@ -1,6 +1,6 @@
 """
 Comprehensive test suite for the inference gateway:
-- Round-robin routing & concurrency
+- Round-robin, weighted, and adaptive routing & concurrency
 - Replica discovery & readiness health filtering
 - Gateway HTTP endpoint behavior (/health, /ready, /replicas, /predict)
 - Real request forwarding, payload preservation, and metadata enrichment
@@ -65,6 +65,56 @@ class TestRoundRobinRouter:
         assert selected.count("http://10.0.0.1:8000") == 5
         assert selected.count("http://10.0.0.2:8000") == 3
         assert selected.count("http://10.0.0.3:8000") == 2
+
+    def test_adaptive_prefers_lowest_composite_penalty(self):
+        r = RoundRobinRouter()
+        r.check_health = False
+        ips = ["10.0.0.1", "10.0.0.2"]
+        with patch.object(r, "_resolve_endpoints", return_value=ips):
+            r.refresh()
+        first, second = [f"http://{ip}:8000" for ip in ips]
+        for _ in range(4):
+            r.record_result(first, 100.0, 200)
+            r.record_result(second, 10.0, 200)
+        r._cpu_pct = {first: 80.0, second: 10.0}
+        scores = r.adaptive_scores()
+        assert scores[second] < scores[first]
+        assert r.next_endpoint("adaptive") == second
+
+    def test_adaptive_fairly_rotates_when_scores_tie_and_falls_back_without_cpu(self):
+        r = RoundRobinRouter()
+        r.check_health = False
+        ips = ["10.0.0.1", "10.0.0.2", "10.0.0.3"]
+        with patch.object(r, "_resolve_endpoints", return_value=ips):
+            r.refresh()
+        selected = [r.next_endpoint("adaptive") for _ in range(6)]
+        assert selected.count("http://10.0.0.1:8000") == 2
+        assert selected.count("http://10.0.0.2:8000") == 2
+        assert selected.count("http://10.0.0.3:8000") == 2
+        assert all(0.0 <= score <= 1.0 for score in r.adaptive_scores().values())
+
+    def test_adaptive_records_inflight_latency_and_errors(self):
+        r = RoundRobinRouter()
+        r.check_health = False
+        with patch.object(r, "_resolve_endpoints", return_value=["10.0.0.1"]):
+            r.refresh()
+        endpoint = r.next_endpoint("adaptive")
+        assert r._observations[endpoint]["active"] == 1
+        r.record_result(endpoint, 25.0, 503)
+        assert r._observations[endpoint]["active"] == 0
+        assert list(r._observations[endpoint]["latencies"]) == [25.0]
+        assert list(r._observations[endpoint]["errors"]) == [1.0]
+
+    def test_metrics_server_cpu_is_joined_to_discovered_pod_ip(self):
+        r = RoundRobinRouter()
+        r.check_health = False
+        with patch.object(r, "_resolve_endpoints", return_value=["10.0.0.1"]):
+            r.refresh()
+        pod_list = {"items": [{"metadata": {"name": "inference-pod"}, "status": {"podIP": "10.0.0.1"}}]}
+        pod_metrics = {"items": [{"metadata": {"name": "inference-pod"}, "containers": [{"usage": {"cpu": "50m"}}]}]}
+        with patch.object(r, "_k8s_get", side_effect=[pod_list, pod_metrics]):
+            cpu = r.refresh_adaptive_metrics()
+        assert cpu["http://10.0.0.1:8000"] == 10.0
 
     def test_wrr_excludes_unhealthy_endpoints_and_supports_failover(self):
         r = RoundRobinRouter()
@@ -288,6 +338,43 @@ class TestGatewayServiceEndpoints:
             assert resp.status_code == 200
             assert resp.json()["prediction"] == "1"
 
+    def test_predict_adaptive_strategy_returns_strategy_metadata(self, client):
+        async def mock_post(url, *args, **kwargs):
+            return httpx.Response(
+                200,
+                json={"prediction": "1", "replica_id": "pod-1", "request_id": "r1", "latency_ms": 2.0},
+                request=httpx.Request("POST", url),
+            )
+
+        with patch.object(router, "_endpoints", ["10.0.0.1"]), \
+             patch("httpx.AsyncClient.post", side_effect=mock_post):
+            resp = client.post("/predict", json={"features": {"Age": 22}}, headers={"X-Routing-Strategy": "adaptive"})
+        assert resp.status_code == 200
+        assert resp.json()["gateway_meta"]["routing_strategy"] == "adaptive"
+
+    def test_adaptive_strategy_fails_over_after_connection_error(self, client):
+        attempted = []
+
+        async def mock_post(url, *args, **kwargs):
+            attempted.append(url)
+            if url.startswith("http://10.0.0.1:"):
+                raise httpx.ConnectError("connection refused")
+            return httpx.Response(
+                200,
+                json={"prediction": "1", "replica_id": "pod-2", "request_id": "r2", "latency_ms": 4.0},
+                request=httpx.Request("POST", url),
+            )
+
+        with patch.object(router, "_endpoints", ["10.0.0.1", "10.0.0.2"]), \
+             patch.object(router, "_adaptive_index", 0), \
+             patch("httpx.AsyncClient.post", side_effect=mock_post):
+            response = client.post(
+                "/predict", json={"features": {"Age": 22}}, headers={"X-Routing-Strategy": "adaptive"}
+            )
+        assert response.status_code == 200
+        assert response.json()["replica_id"] == "pod-2"
+        assert attempted == ["http://10.0.0.1:8000/predict", "http://10.0.0.2:8000/predict"]
+
     def test_predict_upstream_error_propagation(self, client):
         """Upstream HTTP 400 errors propagate faithfully with original detail."""
         async def mock_post(url, *args, **kwargs):
@@ -489,6 +576,30 @@ class TestTelemetryGatewayIntegration:
                 status = aggregator.get_gateway_runtime_status()
             assert status["strategy"] == "Weighted Round Robin"
             assert "weighted distribution" in status["strategy_desc"]
+        finally:
+            routing_config.set_strategy(prior)
+
+    def test_telemetry_reports_adaptive_strategy(self):
+        import sys
+        from pathlib import Path
+        backend_dir = str(Path(__file__).parent.parent / "backend")
+        if backend_dir not in sys.path:
+            sys.path.insert(0, backend_dir)
+        from inference_telemetry import TelemetryAggregator, routing_config
+
+        aggregator = TelemetryAggregator()
+        response = MagicMock()
+        response.status = 200
+        response.read.return_value = json.dumps({"status": "ready", "available_replicas": 3}).encode()
+        response.__enter__.return_value = response
+        response.__exit__.return_value = None
+        prior = routing_config.get_strategy()
+        try:
+            routing_config.set_strategy("adaptive")
+            with patch("urllib.request.urlopen", return_value=response):
+                status = aggregator.get_gateway_runtime_status()
+            assert status["strategy"] == "Adaptive Dynamic Routing"
+            assert "lowest composite penalty" in status["strategy_desc"]
         finally:
             routing_config.set_strategy(prior)
 

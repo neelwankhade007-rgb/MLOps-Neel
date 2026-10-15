@@ -1,6 +1,6 @@
 # MLOps Inference Gateway
 
-Round-robin and weighted round-robin routing gateway for distributing prediction requests across inference replicas.
+Round-robin, weighted round-robin, and opt-in adaptive routing gateway for distributing prediction requests across inference replicas.
 
 ## Architecture
 
@@ -9,12 +9,13 @@ The gateway sits between the backend and inference replicas:
 ```
 Frontend → Backend → Gateway → Inference Replicas (3x)
                          ↓
-                   Round Robin
+                 Selected L7 Strategy
 ```
 
 ## Features
 
 - **Round-robin load balancing**: Distributes requests evenly across replicas
+- **Adaptive dynamic routing**: Selects the ready replica with the lowest observed composite penalty
 - **Dynamic endpoint discovery**: Discovers replica IPs via headless DNS (`inference-service-headless.mlops.svc.cluster.local`)
 - **Automatic refresh**: Re-discovers endpoints every 10s to handle pod restarts
 - **Concurrency-safe**: Thread-safe round-robin and smooth weighted round-robin selection
@@ -25,7 +26,7 @@ Frontend → Backend → Gateway → Inference Replicas (3x)
 
 ## Endpoints
 
-- `POST /predict` - Forward prediction to the next ready replica; backend selects `round_robin` or `weighted_round_robin` with `X-Routing-Strategy`
+- `POST /predict` - Forward prediction to a ready replica; backend selects `round_robin`, `weighted_round_robin`, or `adaptive` with `X-Routing-Strategy`
 - `GET /health` - Liveness probe
 - `GET /ready` - Readiness probe (503 if no replicas discovered)
 - `GET /replicas` - List discovered replica endpoints
@@ -36,6 +37,7 @@ Environment variables:
 - `HEADLESS_DNS` - Headless service DNS (default: `inference-service-headless.mlops.svc.cluster.local`)
 - `INFERENCE_PORT` - Replica port (default: `8000`)
 - `DISCOVERY_INTERVAL_S` - Refresh interval (default: `10`)
+- `ADAPTIVE_METRICS_INTERVAL_S` - CPU metric refresh interval (default: `5` seconds)
 
 ## Response Contract
 
@@ -74,6 +76,10 @@ Tests cover:
 # Build image
 docker build -t mlops-gateway:latest gateway/
 
+# Apply the gateway's namespace-scoped read-only pod/metrics permissions and config
+kubectl apply -f kubernetes/config/04-gateway-rbac.yaml
+kubectl apply -f kubernetes/config/01-configmap.yaml
+
 # Deploy to Kubernetes
 kubectl apply -f kubernetes/workloads/07-gateway.yaml
 ```
@@ -98,6 +104,6 @@ configured list receive weight `1`.
 
 ## Constraints
 
-- **Round robin only** - No adaptive routing based on load/latency
-- **No retries** - Failed requests are not retried to avoid duplication
+- **Adaptive mode is opt-in** - When selected, the gateway picks the healthy replica with the lowest observed composite penalty, using 40% latency, 30% in-flight requests, 20% CPU, and 10% recent errors. CPU metrics refresh from Metrics Server every 5 seconds by default; missing metric dimensions are omitted and remaining weights are renormalized.
+- **Bounded failover** - On connection failure, the gateway tries one alternate ready replica; it does not retry upstream HTTP responses
 - **Single replica gateway** - The gateway itself is not load-balanced (can be scaled if needed)

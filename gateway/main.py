@@ -15,7 +15,7 @@ UPSTREAM_TIMEOUT_S = 10.0
 
 app = FastAPI(
     title="MLOps Inference Gateway",
-    description="Round-robin routing gateway for inference replicas",
+    description="Inference gateway with round-robin, weighted, and adaptive routing",
     version="1.0.0",
 )
 
@@ -76,7 +76,7 @@ async def predict(request: Request):
     # Validate model run consistency if caller requested a specific run
     expected_run_id = request.headers.get("X-Model-Run-ID")
     strategy = request.headers.get("X-Routing-Strategy", "round_robin").strip().lower()
-    if strategy not in ("round_robin", "weighted_round_robin"):
+    if strategy not in ("round_robin", "weighted_round_robin", "adaptive"):
         raise HTTPException(status_code=400, detail="Unsupported gateway routing strategy")
     active_run_id = router.model_run_id or MODEL_RUN_ID
     if expected_run_id and expected_run_id != active_run_id:
@@ -108,19 +108,23 @@ async def predict(request: Request):
 
             url = f"{target}/predict"
             attempted.append(target)
+            attempt_started = time.perf_counter()
             try:
                 upstream_resp = await client.post(
                     url,
                     content=body,
                     headers={"Content-Type": "application/json"},
                 )
+                router.record_result(target, (time.perf_counter() - attempt_started) * 1000.0, upstream_resp.status_code)
                 break  # Successfully communicated with replica
             except httpx.TimeoutException:
+                router.record_result(target, (time.perf_counter() - attempt_started) * 1000.0, None)
                 raise HTTPException(
                     status_code=status.HTTP_504_GATEWAY_TIMEOUT,
                     detail=f"Upstream replica timed out after {UPSTREAM_TIMEOUT_S}s",
                 )
             except httpx.ConnectError as exc:
+                router.record_result(target, (time.perf_counter() - attempt_started) * 1000.0, None)
                 last_error = exc
                 logger.warning(
                     "Connection error to replica %s (attempt %d/%d): %s",
@@ -132,6 +136,7 @@ async def predict(request: Request):
                         detail=f"Failed to connect to replica at {target}: {exc}",
                     )
             except httpx.HTTPError as exc:
+                router.record_result(target, (time.perf_counter() - attempt_started) * 1000.0, None)
                 raise HTTPException(
                     status_code=status.HTTP_502_BAD_GATEWAY,
                     detail=f"Upstream request failed: {exc}",
@@ -171,7 +176,6 @@ async def predict(request: Request):
         "gateway_latency_ms": round(latency_ms, 3),
         "model_run_id": active_run_id,
     }
-
     return upstream_data
 
 

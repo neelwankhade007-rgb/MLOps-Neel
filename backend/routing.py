@@ -5,11 +5,13 @@ from typing import Dict, Any, Tuple
 STRATEGY_NATIVE = "native"
 STRATEGY_ROUND_ROBIN = "round_robin"
 STRATEGY_WEIGHTED_ROUND_ROBIN = "weighted_round_robin"
+STRATEGY_ADAPTIVE = "adaptive"
 
 STRATEGY_LABELS = {
     STRATEGY_NATIVE: "Native Kubernetes Service",
     STRATEGY_ROUND_ROBIN: "Round Robin",
     STRATEGY_WEIGHTED_ROUND_ROBIN: "Weighted Round Robin",
+    STRATEGY_ADAPTIVE: "Adaptive Dynamic Routing",
 }
 
 
@@ -26,6 +28,8 @@ class RoutingConfig:
             "round_robin": STRATEGY_ROUND_ROBIN, "round robin": STRATEGY_ROUND_ROBIN,
             "rr": STRATEGY_ROUND_ROBIN, "weighted_round_robin": STRATEGY_WEIGHTED_ROUND_ROBIN,
             "weighted round robin": STRATEGY_WEIGHTED_ROUND_ROBIN, "wrr": STRATEGY_WEIGHTED_ROUND_ROBIN,
+            "adaptive": STRATEGY_ADAPTIVE, "adaptive_dynamic_routing": STRATEGY_ADAPTIVE,
+            "adaptive dynamic routing": STRATEGY_ADAPTIVE,
             "native": STRATEGY_NATIVE, "native_kubernetes_service": STRATEGY_NATIVE,
             "native kubernetes service": STRATEGY_NATIVE, "k8s": STRATEGY_NATIVE,
         }
@@ -41,7 +45,7 @@ class RoutingConfig:
             raise ValueError("WRR_WEIGHTS must contain only positive integers")
 
     def get_strategy(self) -> str:
-        """Returns the canonical strategy identifier ('native' or 'round_robin')."""
+        """Returns the canonical identifier for the active routing strategy."""
         with self._lock:
             return self._active_strategy
 
@@ -66,9 +70,11 @@ class RoutingConfig:
             canonical = STRATEGY_ROUND_ROBIN
         elif normalized in ("weighted_round_robin", "weighted round robin", "wrr"):
             canonical = STRATEGY_WEIGHTED_ROUND_ROBIN
+        elif normalized in ("adaptive", "adaptive_dynamic_routing", "adaptive dynamic routing"):
+            canonical = STRATEGY_ADAPTIVE
         else:
             raise ValueError(
-                f"Invalid routing strategy '{strategy}'. Supported strategies: 'native', 'round_robin', 'weighted_round_robin'"
+                f"Invalid routing strategy '{strategy}'. Supported strategies: 'native', 'round_robin', 'weighted_round_robin', 'adaptive'"
             )
 
         with self._lock:
@@ -82,7 +88,7 @@ class RoutingConfig:
         with self._lock:
             strat = self._active_strategy
 
-        if strat in (STRATEGY_ROUND_ROBIN, STRATEGY_WEIGHTED_ROUND_ROBIN):
+        if strat in (STRATEGY_ROUND_ROBIN, STRATEGY_WEIGHTED_ROUND_ROBIN, STRATEGY_ADAPTIVE):
             return f"{self.gateway_url}/predict", strat
         else:
             return f"{self.native_url}/predict", STRATEGY_NATIVE
@@ -97,7 +103,7 @@ class RoutingConfig:
             "gateway_url": self.gateway_url,
             "native_url": self.native_url,
             "wrr_weights": list(self.wrr_weights),
-            "supported_strategies": [STRATEGY_NATIVE, STRATEGY_ROUND_ROBIN, STRATEGY_WEIGHTED_ROUND_ROBIN],
+            "supported_strategies": [STRATEGY_NATIVE, STRATEGY_ROUND_ROBIN, STRATEGY_WEIGHTED_ROUND_ROBIN, STRATEGY_ADAPTIVE],
         }
 
 
