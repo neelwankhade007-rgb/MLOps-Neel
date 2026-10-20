@@ -17,20 +17,13 @@ export interface TrainingActivityItem {
 }
 
 export interface TrainingActivityChartProps {
-  data?: TrainingActivityItem[];
+  data: TrainingActivityItem[];
+  loading?: boolean;
 }
 
-const defaultData: TrainingActivityItem[] = [
-  { month: 'Jan', jobs: 3 },
-  { month: 'Feb', jobs: 5 },
-  { month: 'Mar', jobs: 4 },
-  { month: 'Apr', jobs: 7 },
-  { month: 'May', jobs: 6 },
-  { month: 'Jun', jobs: 8 },
-];
-
 export const TrainingActivityChart: React.FC<TrainingActivityChartProps> = ({
-  data = defaultData,
+  data,
+  loading = false,
 }) => {
   return (
     <Card className="p-6">
@@ -38,13 +31,13 @@ export const TrainingActivityChart: React.FC<TrainingActivityChartProps> = ({
         <div>
           <h2 className="text-lg font-bold text-slate-900">Training Activity</h2>
           <p className="text-sm text-slate-500">
-            Training jobs completed over time
+          Completed training jobs by month (last 6 months)
           </p>
         </div>
         <TrendingUp size={20} className="text-indigo-600" />
       </div>
 
-      <div className="h-64">
+      {loading ? <div className="h-64 flex items-center justify-center text-sm text-slate-500">Loading training history…</div> : data.every((item) => item.jobs === 0) ? <div className="h-64 flex items-center justify-center text-sm text-slate-500">No completed training jobs recorded in this period.</div> : <div className="h-64">
         <ResponsiveContainer width="100%" height="100%">
           <LineChart data={data}>
             <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
@@ -66,7 +59,7 @@ export const TrainingActivityChart: React.FC<TrainingActivityChartProps> = ({
             />
           </LineChart>
         </ResponsiveContainer>
-      </div>
+      </div>}
     </Card>
   );
 };

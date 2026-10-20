@@ -24,21 +24,32 @@ import AutoTrafficGenerator from '../components/monitoring/AutoTrafficGenerator'
 import ConfigurableWeightsPanel from '../components/monitoring/ConfigurableWeightsPanel';
 
 
-// Helper: Generate SVG sparkline path from numeric array
+// Build a softly smoothed SVG line from observed samples.
 function generateSparkline(data: number[], width = 100, height = 24, pad = 2): string {
   if (!data || data.length === 0) {
     return `M 0,${height - pad} L ${width},${height - pad}`;
   }
   const max = Math.max(0.1, ...data);
-  const min = 0;
   const step = width / Math.max(1, data.length - 1);
-  return data
-    .map((v, i) => {
-      const x = (i * step).toFixed(1);
-      const y = (height - pad - (Math.max(0, v - min) / (max - min)) * (height - 2 * pad)).toFixed(1);
-      return `${i === 0 ? 'M' : 'L'} ${x},${y}`;
-    })
-    .join(' ');
+  const points = data.map((value, index) => ({
+    x: index * step,
+    y: height - pad - (Math.max(0, value) / max) * (height - 2 * pad),
+  }));
+  if (points.length === 1) return `M 0,${points[0].y.toFixed(1)} L ${width},${points[0].y.toFixed(1)}`;
+
+  let path = `M ${points[0].x.toFixed(1)},${points[0].y.toFixed(1)}`;
+  for (let index = 0; index < points.length - 1; index += 1) {
+    const previous = points[Math.max(0, index - 1)];
+    const current = points[index];
+    const next = points[index + 1];
+    const afterNext = points[Math.min(points.length - 1, index + 2)];
+    const control1X = current.x + (next.x - previous.x) / 6;
+    const control1Y = current.y + (next.y - previous.y) / 6;
+    const control2X = next.x - (afterNext.x - current.x) / 6;
+    const control2Y = next.y - (afterNext.y - current.y) / 6;
+    path += ` C ${control1X.toFixed(1)},${control1Y.toFixed(1)} ${control2X.toFixed(1)},${control2Y.toFixed(1)} ${next.x.toFixed(1)},${next.y.toFixed(1)}`;
+  }
+  return path;
 }
 
 // Helper: Generate closed area sparkline path
@@ -64,15 +75,25 @@ function generateChartPath(
   const chartW = width - paddingLeft - paddingRight;
   const chartH = height - paddingTop - paddingBottom;
   const step = chartW / Math.max(1, values.length - 1);
+  const points = values.map((value, index) => ({
+    x: paddingLeft + index * step,
+    y: height - paddingBottom - Math.min(1, Math.max(0, value / maxY)) * chartH,
+  }));
+  if (points.length === 1) return `M ${points[0].x.toFixed(1)},${points[0].y.toFixed(1)}`;
 
-  return values
-    .map((v, i) => {
-      const x = paddingLeft + i * step;
-      const normalizedY = Math.min(1.0, Math.max(0, v / maxY));
-      const y = height - paddingBottom - normalizedY * chartH;
-      return `${i === 0 ? 'M' : 'L'} ${x.toFixed(1)},${y.toFixed(1)}`;
-    })
-    .join(' ');
+  let path = `M ${points[0].x.toFixed(1)},${points[0].y.toFixed(1)}`;
+  for (let index = 0; index < points.length - 1; index += 1) {
+    const previous = points[Math.max(0, index - 1)];
+    const current = points[index];
+    const next = points[index + 1];
+    const afterNext = points[Math.min(points.length - 1, index + 2)];
+    const control1X = current.x + (next.x - previous.x) / 6;
+    const control1Y = current.y + (next.y - previous.y) / 6;
+    const control2X = next.x - (afterNext.x - current.x) / 6;
+    const control2Y = next.y - (afterNext.y - current.y) / 6;
+    path += ` C ${control1X.toFixed(1)},${control1Y.toFixed(1)} ${control2X.toFixed(1)},${control2Y.toFixed(1)} ${next.x.toFixed(1)},${next.y.toFixed(1)}`;
+  }
+  return path;
 }
 
 export const InferenceMonitoringPage: React.FC = () => {
@@ -328,10 +349,6 @@ export const InferenceMonitoringPage: React.FC = () => {
     ? 'Weighted Round Robin'
     : isAdaptiveRouting ? 'Adaptive Dynamic Routing'
     : activeStrategy === 'round_robin' ? 'Round Robin' : 'Native Kubernetes Service';
-  const gatewayMechanism = isWeightedRoundRobin
-    ? `L7 Weighted Round Robin (${wrrWeights.join(':')})`
-    : isAdaptiveRouting ? 'L7 Adaptive Dynamic Routing (40/30/20/10 penalty score)' : 'L7 Round Robin';
-
   const replicas: ReplicaTelemetry[] = telemetry?.replicas || [];
   const telemetryEvents: RecentEvent[] = telemetry?.recent_events || [];
 
@@ -403,7 +420,7 @@ export const InferenceMonitoringPage: React.FC = () => {
   const hasActiveTraffic = summary.throughput_rps > 0;
 
   return (
-    <div className="max-w-7xl mx-auto space-y-6">
+    <div className="mx-auto w-full max-w-[1680px] space-y-5">
       <Header
         category="Inference"
         title="Adaptive Load Balancing"
@@ -496,68 +513,32 @@ export const InferenceMonitoringPage: React.FC = () => {
         </div>
 
         {/* ==================== SLIM INFRASTRUCTURE STATUS RIBBON ==================== */}
-        <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-2.5 rounded-lg bg-white border border-slate-200 shadow-sm text-xs">
-          <div className="flex flex-wrap items-center gap-6 text-slate-600">
-            <div className="flex items-center gap-2">
-              <span className="relative flex h-2 w-2">
-                {hasActiveTraffic && (
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-                )}
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
-              </span>
-              <span className="font-semibold text-slate-900">Gateway:</span>
-              <span className="text-emerald-600 font-semibold">Healthy</span>
-            </div>
-
-            <div className="flex items-center gap-1.5">
-              <span className="font-semibold text-slate-900">Replicas:</span>
-              <span className="font-mono text-xs px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200 font-semibold">
-                {summary.healthy_replicas} / {summary.total_replicas || 3} Online
-              </span>
-            </div>
-
-            <div className="flex items-center gap-1.5">
-              <span className="font-semibold text-slate-900">Model:</span>
-              <span className="font-mono text-xs px-2 py-0.5 rounded bg-slate-100 text-slate-700">
-                {summary.model_name}
-              </span>
-            </div>
-
-            <div className="flex items-center gap-1.5">
-              <span className="font-semibold text-slate-900">Namespace:</span>
-              <span className="font-mono text-xs px-2 py-0.5 rounded bg-slate-100 text-slate-700">
-                {summary.namespace}
-              </span>
-            </div>
-
-            <div className="hidden xl:flex items-center gap-1.5">
-              <span className="font-semibold text-slate-900">Active Policy:</span>
-              <span className={`px-2 py-0.5 rounded font-mono text-[11px] font-semibold border ${
-                isGatewayActive
-                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                  : 'bg-blue-50 text-blue-700 border-blue-200'
-              }`}>
-                {activeStrategyTitle}
-              </span>
-            </div>
-          </div>
-
+        <div className="flex flex-wrap items-center gap-x-6 gap-y-2 rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs shadow-sm">
           <div className="flex items-center gap-2">
-            <span className={`px-2.5 py-1 rounded font-mono text-[11px] font-medium flex items-center gap-1.5 border ${
-              isGatewayActive
-                ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                : 'bg-slate-100 text-slate-700 border-slate-200'
-            }`}>
-              <ShieldCheck size={13} className={isGatewayActive ? "text-emerald-600" : "text-blue-600"} />
-              Routing: {isGatewayActive ? `Custom Gateway (${gatewayMechanism})` : 'Native K8s IPTables / IPVS'}
+            <span className={`h-2 w-2 rounded-full ${summary.healthy_replicas === summary.total_replicas ? 'bg-emerald-500' : 'bg-amber-500'}`} />
+            <span className="font-medium text-slate-600">Replicas</span>
+            <span className="font-mono font-semibold text-slate-900">
+              {summary.healthy_replicas} / {summary.total_replicas || 3}
             </span>
+          </div>
+          <div className="min-w-0 flex-1">
+            <span className="mr-2 font-medium text-slate-500">Model</span>
+            <span className="font-mono text-slate-700">{summary.model_name}</span>
+          </div>
+          <div>
+            <span className="mr-2 font-medium text-slate-500">Namespace</span>
+            <span className="font-mono text-slate-700">{summary.namespace}</span>
+          </div>
+          <div>
+            <span className="mr-2 font-medium text-slate-500">Policy</span>
+            <span className="font-medium text-blue-700">{activeStrategyTitle}</span>
           </div>
         </div>
 
         {/* ==================== SECTION 1: 5 KPI SUMMARY CARDS ==================== */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-5">
           {/* KPI 1: Throughput */}
-          <div className="p-4 rounded-xl bg-white border border-slate-200 shadow-sm flex flex-col justify-between">
+          <div className="group flex min-h-[168px] flex-col justify-between rounded-2xl border border-slate-200/70 bg-gradient-to-br from-white via-white to-slate-50/80 p-4 shadow-[0_10px_28px_rgba(15,23,42,0.04)] transition-shadow hover:shadow-[0_16px_32px_rgba(15,23,42,0.07)] sm:p-5">
             <div className="flex items-center justify-between text-slate-500">
               <span className="text-xs font-semibold">Throughput</span>
               <Zap size={16} className="text-slate-400" />
@@ -580,25 +561,16 @@ export const InferenceMonitoringPage: React.FC = () => {
             </div>
             {/* Real Dynamic Sparkline */}
             <div className="w-full h-7 pt-1">
-              <svg className="w-full h-full text-emerald-500" fill="none" preserveAspectRatio="none" viewBox="0 0 100 24">
-                <path
-                  d={generateSparkline(historyThroughput, 100, 24)}
-                  fill="none"
-                  stroke="currentColor"
-                  strokeLinecap="round"
-                  strokeWidth="2"
-                />
-                <path
-                  d={generateSparklineArea(historyThroughput, 100, 24)}
-                  fill="currentColor"
-                  fillOpacity="0.1"
-                />
+              <svg className="w-full h-full" fill="none" preserveAspectRatio="none" viewBox="0 0 100 24" aria-label="Throughput trend">
+                <defs><linearGradient id="throughput-fill" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stopColor="#5DBEAA" stopOpacity="0.2" /><stop offset="100%" stopColor="#5DBEAA" stopOpacity="0" /></linearGradient></defs>
+                <path d={generateSparklineArea(historyThroughput, 100, 24)} fill="url(#throughput-fill)" />
+                <path d={generateSparkline(historyThroughput, 100, 24)} fill="none" stroke="#52A995" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.7" />
               </svg>
             </div>
           </div>
 
           {/* KPI 2: P95 Latency */}
-          <div className="p-4 rounded-xl bg-white border border-slate-200 shadow-sm flex flex-col justify-between">
+          <div className="group flex min-h-[168px] flex-col justify-between rounded-2xl border border-slate-200/70 bg-gradient-to-br from-white via-white to-slate-50/80 p-4 shadow-[0_10px_28px_rgba(15,23,42,0.04)] transition-shadow hover:shadow-[0_16px_32px_rgba(15,23,42,0.07)] sm:p-5">
             <div className="flex items-center justify-between text-slate-500">
               <span className="text-xs font-semibold">P95 latency</span>
               <Clock size={16} className="text-slate-400" />
@@ -623,25 +595,16 @@ export const InferenceMonitoringPage: React.FC = () => {
             </div>
             {/* Real Dynamic Latency Sparkline */}
             <div className="w-full h-7 pt-1">
-              <svg className="w-full h-full text-blue-600" fill="none" preserveAspectRatio="none" viewBox="0 0 100 24">
-                <path
-                  d={generateSparkline(historyLatencyP95, 100, 24)}
-                  fill="none"
-                  stroke="currentColor"
-                  strokeLinecap="round"
-                  strokeWidth="2"
-                />
-                <path
-                  d={generateSparklineArea(historyLatencyP95, 100, 24)}
-                  fill="currentColor"
-                  fillOpacity="0.1"
-                />
+              <svg className="w-full h-full" fill="none" preserveAspectRatio="none" viewBox="0 0 100 24" aria-label="P95 latency trend">
+                <defs><linearGradient id="latency-fill" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stopColor="#7C9FFB" stopOpacity="0.2" /><stop offset="100%" stopColor="#7C9FFB" stopOpacity="0" /></linearGradient></defs>
+                <path d={generateSparklineArea(historyLatencyP95, 100, 24)} fill="url(#latency-fill)" />
+                <path d={generateSparkline(historyLatencyP95, 100, 24)} fill="none" stroke="#7695E8" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.7" />
               </svg>
             </div>
           </div>
 
           {/* KPI 3: Error Rate */}
-          <div className="p-4 rounded-xl bg-white border border-slate-200 shadow-sm flex flex-col justify-between">
+          <div className="group flex min-h-[168px] flex-col justify-between rounded-2xl border border-slate-200/70 bg-gradient-to-br from-white via-white to-slate-50/80 p-4 shadow-[0_10px_28px_rgba(15,23,42,0.04)] transition-shadow hover:shadow-[0_16px_32px_rgba(15,23,42,0.07)] sm:p-5">
             <div className="flex items-center justify-between text-slate-500">
               <span className="text-xs font-semibold">Error rate</span>
               <AlertTriangle size={16} className="text-slate-400" />
@@ -667,20 +630,16 @@ export const InferenceMonitoringPage: React.FC = () => {
             </div>
             {/* Real Error Sparkline */}
             <div className="w-full h-7 pt-1">
-              <svg className="w-full h-full text-slate-400" fill="none" preserveAspectRatio="none" viewBox="0 0 100 24">
-                <path
-                  d={generateSparkline(historyErrors, 100, 24)}
-                  fill="none"
-                  stroke={summary.total_errors > 0 ? '#EF4444' : '#10B981'}
-                  strokeLinecap="round"
-                  strokeWidth="2"
-                />
+              <svg className="w-full h-full" fill="none" preserveAspectRatio="none" viewBox="0 0 100 24" aria-label="Error rate trend">
+                <defs><linearGradient id="error-fill" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stopColor={summary.total_errors > 0 ? '#E99A9A' : '#72BEAA'} stopOpacity="0.18" /><stop offset="100%" stopColor={summary.total_errors > 0 ? '#E99A9A' : '#72BEAA'} stopOpacity="0" /></linearGradient></defs>
+                <path d={generateSparklineArea(historyErrors, 100, 24)} fill="url(#error-fill)" />
+                <path d={generateSparkline(historyErrors, 100, 24)} fill="none" stroke={summary.total_errors > 0 ? '#D98787' : '#62AA97'} strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.7" />
               </svg>
             </div>
           </div>
 
           {/* KPI 4: Active Replicas */}
-          <div className="p-4 rounded-xl bg-white border border-slate-200 shadow-sm flex flex-col justify-between">
+          <div className="group flex min-h-[168px] flex-col justify-between rounded-2xl border border-slate-200/70 bg-gradient-to-br from-white via-white to-slate-50/80 p-4 shadow-[0_10px_28px_rgba(15,23,42,0.04)] transition-shadow hover:shadow-[0_16px_32px_rgba(15,23,42,0.07)] sm:p-5">
             <div className="flex items-center justify-between text-slate-500">
               <span className="text-xs font-semibold">Active replicas</span>
               <Server size={16} className="text-slate-400" />
@@ -721,7 +680,7 @@ export const InferenceMonitoringPage: React.FC = () => {
           </div>
 
           {/* KPI 5: Gateway Dispatch Overhead */}
-          <div className="p-4 rounded-xl bg-white border border-slate-200 shadow-sm flex flex-col justify-between">
+          <div className="group flex min-h-[168px] flex-col justify-between rounded-2xl border border-slate-200/70 bg-gradient-to-br from-white via-white to-slate-50/80 p-4 shadow-[0_10px_28px_rgba(15,23,42,0.04)] transition-shadow hover:shadow-[0_16px_32px_rgba(15,23,42,0.07)] sm:p-5">
             <div className="flex items-center justify-between text-slate-500">
               <span className="text-xs font-semibold">Gateway dispatch</span>
               <Cpu size={16} className="text-slate-400" />
@@ -758,32 +717,10 @@ export const InferenceMonitoringPage: React.FC = () => {
           </div>
         </div>
 
-        {/* ==================== SECTION 2: LIVE INFERENCE ROUTING TOPOLOGY ==================== */}
-        <LiveRoutingVisualizer
-          replicas={replicas}
-          activeStrategy={activeStrategy}
-          activeStrategyTitle={activeStrategyTitle}
-          isGatewayActive={isGatewayActive}
-          activePackets={activePackets}
-          recentlyHitPod={recentlyHitPod}
-          onSelectReplica={(r) => setSelectedReplicaModal(r)}
-          throughputRps={summary.throughput_rps}
-          isGeneratingTraffic={isGeneratingTraffic}
-        />
-
-        {/* ==================== SECTION 2B: GANTT-STYLE REQUEST TIMELINE ==================== */}
-        <GanttRequestTimeline
-          events={allTimelineEvents}
-          replicas={replicas}
-          windowSize={ganttWindowSize}
-          onWindowSizeChange={setGanttWindowSize}
-          onClearEvents={() => setClearedEventIds(new Set(allTimelineEvents.map(e => e.request_id)))}
-        />
-
-        {/* ==================== SECTION 3: ROUTING STRATEGIES & OBJECTIVE WEIGHT TUNING ==================== */}
-        <div id="objective-tuning-panel" className="grid grid-cols-1 xl:grid-cols-12 gap-5">
+        {/* Routing strategy and weights */}
+        <div id="objective-tuning-panel" className="grid grid-cols-1 gap-5 2xl:grid-cols-12">
           {/* Strategy Selection (5 Cols) */}
-          <div className="xl:col-span-5 p-5 rounded-xl bg-white border border-slate-200 shadow-sm flex flex-col justify-between">
+          <div className="2xl:col-span-5 min-w-0 rounded-2xl border border-slate-200/70 bg-white p-5 shadow-[0_10px_28px_rgba(15,23,42,0.04)] sm:p-6 flex flex-col justify-between">
             <div>
               <div className="flex items-center justify-between mb-2">
                 <h3 className="text-base font-bold text-slate-900">Routing Strategies</h3>
@@ -923,7 +860,7 @@ export const InferenceMonitoringPage: React.FC = () => {
           </div>
 
           {/* Configurable Live Weights & Adaptive Objective Tuning (7 Cols) */}
-          <div className="xl:col-span-7">
+          <div className="2xl:col-span-7">
             <ConfigurableWeightsPanel
               replicas={replicas}
               activeStrategy={activeStrategy}
@@ -935,316 +872,31 @@ export const InferenceMonitoringPage: React.FC = () => {
           </div>
         </div>
 
-        {/* ==================== SECTION 4: REAL-TIME OBSERVABILITY GRID (2x2) ==================== */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-          {/* CHART A: Latency Over Time - REAL OBSERVATIONS */}
-          <div className="p-5 rounded-xl bg-white border border-slate-200 shadow-sm flex flex-col justify-between">
-            <div className="flex items-center justify-between mb-3">
-              <div>
-                <div className="flex items-center gap-2">
-                  <h3 className="font-bold text-slate-900 text-sm">Latency Distribution Over Time</h3>
-                  <span className="px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 font-mono text-[10px] font-bold border border-emerald-200">
-                    REAL OBSERVATIONS
-                  </span>
-                </div>
-                <span className="text-xs text-slate-500">P50 vs P95 vs P99 response time in milliseconds</span>
-              </div>
-              <div className="flex items-center gap-1 bg-slate-100 p-0.5 rounded-lg text-xs">
-                {(['5m', '15m', '1h'] as const).map((w) => (
-                  <button
-                    key={w}
-                    onClick={() => setChartTimeWindow(w)}
-                    className={`px-2 py-0.5 rounded font-medium transition-all ${
-                      chartTimeWindow === w ? 'bg-white shadow-sm text-slate-900' : 'text-slate-500 hover:text-slate-800'
-                    }`}
-                  >
-                    {w}
-                  </button>
-                ))}
-              </div>
-            </div>
+        <section aria-label="Locust load generation" className="w-full">
+          <AutoTrafficGenerator
+            activeStrategy={activeStrategy}
+            activeStrategyTitle={activeStrategyTitle}
+            isGatewayActive={isGatewayActive}
+            onTrafficDispatched={handleAutoTrafficDispatched}
+            onActiveTrafficChange={setIsGeneratingTraffic}
+          />
+        </section>
+        {/* Live request-routing topology */}
+        <LiveRoutingVisualizer
+          replicas={replicas}
+          activeStrategy={activeStrategy}
+          activeStrategyTitle={activeStrategyTitle}
+          isGatewayActive={isGatewayActive}
+          activePackets={activePackets}
+          recentlyHitPod={recentlyHitPod}
+          onSelectReplica={(r) => setSelectedReplicaModal(r)}
+          throughputRps={summary.throughput_rps}
+          isGeneratingTraffic={isGeneratingTraffic}
+        />
 
-            {/* Dynamic Latency SVG Chart */}
-            <div className="relative w-full h-52 pt-2">
-              <svg className="w-full h-full" fill="none" viewBox="0 0 500 180">
-                {/* Horizontal Grid */}
-                <line stroke="#E2E8F0" strokeDasharray="3 3" x1="40" x2="480" y1="20" y2="20" />
-                <line stroke="#E2E8F0" strokeDasharray="3 3" x1="40" x2="480" y1="60" y2="60" />
-                <line stroke="#E2E8F0" strokeDasharray="3 3" x1="40" x2="480" y1="100" y2="100" />
-                <line stroke="#E2E8F0" strokeDasharray="3 3" x1="40" x2="480" y1="140" y2="140" />
-
-                {/* Y-Axis Labels */}
-                <text fill="#737686" fontFamily="JetBrains Mono" fontSize="10" textAnchor="end" x="35" y="24">500ms</text>
-                <text fill="#737686" fontFamily="JetBrains Mono" fontSize="10" textAnchor="end" x="35" y="64">350ms</text>
-                <text fill="#737686" fontFamily="JetBrains Mono" fontSize="10" textAnchor="end" x="35" y="104">200ms</text>
-                <text fill="#737686" fontFamily="JetBrains Mono" fontSize="10" textAnchor="end" x="35" y="144">50ms</text>
-
-                {/* Real Dynamic P99 Line (Red, Dashed) */}
-                <path
-                  d={generateChartPath(historyLatencyP99, 500, 180, 40, 20, 20, 40, 500)}
-                  fill="none"
-                  stroke="#EF4444"
-                  strokeDasharray="3 3"
-                  strokeWidth="1.5"
-                />
-
-                {/* Real Dynamic P95 Line (Blue) */}
-                <path
-                  d={generateChartPath(historyLatencyP95, 500, 180, 40, 20, 20, 40, 500)}
-                  fill="none"
-                  stroke="#2563EB"
-                  strokeWidth="2.5"
-                />
-
-                {/* Real Dynamic P50 Line (Green) */}
-                <path
-                  d={generateChartPath(historyLatencyP50, 500, 180, 40, 20, 20, 40, 500)}
-                  fill="none"
-                  stroke="#10B981"
-                  strokeWidth="2"
-                />
-              </svg>
-
-              {/* Tooltip Overlay displaying real measured values */}
-              <div className="absolute top-4 right-10 p-2.5 rounded-lg bg-slate-900 text-white shadow-xl font-mono text-[11px]">
-                <div className="text-emerald-400 font-semibold mb-1">
-                  Active Latency Observation
-                </div>
-                <div className="flex justify-between gap-4 text-slate-300">
-                  <span>P99:</span>
-                  <span className="font-bold text-white">
-                    {summary.p99_latency_ms != null ? `${summary.p99_latency_ms.toFixed(1)} ms` : 'N/A (n<10)'}
-                  </span>
-                </div>
-                <div className="flex justify-between gap-4 text-blue-300">
-                  <span>P95:</span>
-                  <span className="font-bold text-white">
-                    {summary.p95_latency_ms != null ? `${summary.p95_latency_ms.toFixed(1)} ms` : 'N/A (n<5)'}
-                  </span>
-                </div>
-                <div className="flex justify-between gap-4 text-emerald-300">
-                  <span>P50:</span>
-                  <span className="font-bold text-white">
-                    {summary.p50_latency_ms != null ? `${summary.p50_latency_ms.toFixed(1)} ms` : 'N/A'}
-                  </span>
-                </div>
-              </div>
-            </div>
-
-            {/* Legend */}
-            <div className="flex items-center justify-center gap-6 pt-2 font-mono text-xs text-slate-500">
-              <div className="flex items-center gap-1.5">
-                <span className="w-3 h-0.5 bg-red-500" />
-                <span>P99 (Max Jitter)</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <span className="w-3 h-1 bg-blue-600 rounded" />
-                <span className="font-semibold text-slate-900">P95</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <span className="w-3 h-0.5 bg-emerald-500" />
-                <span>P50 (Median)</span>
-              </div>
-            </div>
-          </div>
-
-          {/* CHART B: Request Distribution by Replica - OBSERVED DATA */}
-          <div className="p-5 rounded-xl bg-white border border-slate-200 shadow-sm flex flex-col justify-between">
-            <div className="flex items-center justify-between mb-3">
-              <div>
-                <h3 className="font-bold text-slate-900 text-sm">Request Distribution by Replica</h3>
-                <span className="text-xs text-slate-500">Observed traffic share across backend pod replicas</span>
-              </div>
-              <span className="font-mono text-xs bg-slate-100 px-2 py-0.5 rounded text-slate-700 font-medium">
-                Normalized %
-              </span>
-            </div>
-
-            {/* Stacked Proportional Visualization */}
-            <div className="w-full h-52 flex flex-col justify-center px-4">
-              {summary.total_requests > 0 ? (
-                <div className="space-y-4">
-                  <div className="w-full bg-slate-100 h-8 rounded-lg flex overflow-hidden shadow-inner">
-                    {replicas.map((rep) => (
-                      <div
-                        key={rep.name}
-                        style={{
-                          width: `${rep.traffic_share_pct}%`,
-                          backgroundColor: rep.color
-                        }}
-                        className="h-full flex items-center justify-center text-white font-mono text-xs font-bold transition-all"
-                        title={`${rep.name}: ${rep.traffic_share_pct}% (${rep.requests_served} reqs)`}
-                      >
-                        {rep.traffic_share_pct > 15 ? `${rep.traffic_share_pct}%` : ''}
-                      </div>
-                    ))}
-                  </div>
-
-                  {/* Per-replica breakdown bars */}
-                  <div className="space-y-2 font-mono text-xs">
-                    {replicas.map((rep) => (
-                      <div key={rep.name} className="flex items-center justify-between p-2 rounded bg-slate-50 border border-slate-100">
-                        <div className="flex items-center gap-2">
-                          <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: rep.color }} />
-                          <span className="font-bold text-slate-900">{rep.name}</span>
-                          <span className="text-slate-400 text-[11px]">({rep.pod_ip})</span>
-                        </div>
-                        <div className="flex items-center gap-3">
-                          <span className="text-slate-600">{rep.requests_served} requests</span>
-                          <span className="font-bold" style={{ color: rep.color }}>{rep.traffic_share_pct}%</span>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ) : (
-                <div className="text-center py-12 text-slate-400 font-mono text-xs">
-                  No requests recorded yet. Dispatch test requests to view distribution.
-                </div>
-              )}
-            </div>
-
-            {/* Legend with Live Shares */}
-            <div className="flex items-center justify-center gap-6 pt-2 font-mono text-xs">
-              {replicas.map((rep) => (
-                <div key={rep.name} className="flex items-center gap-1.5">
-                  <span className="w-3 h-3 rounded" style={{ backgroundColor: rep.color }} />
-                  <span className="text-slate-900 font-medium">
-                    {rep.name} ({rep.traffic_share_pct}%)
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* CHART C: Pod Compute Saturation - REAL METRICS SERVER DATA */}
-          <div className="p-5 rounded-xl bg-white border border-slate-200 shadow-sm flex flex-col justify-between">
-            <div className="flex items-center justify-between mb-3">
-              <div>
-                <h3 className="font-bold text-slate-900 text-sm">Pod Compute Saturation</h3>
-                <span className="text-xs text-slate-500">
-                  Real CPU Core Load % vs Memory Resident Set (RSS) % from K8s Metrics Server
-                </span>
-              </div>
-              <Cpu size={18} className="text-slate-400" />
-            </div>
-
-            {/* Resource Bars */}
-            <div className="w-full h-52 flex items-end justify-around px-8 pt-4 pb-2 bg-slate-50/60 rounded-lg border border-slate-100">
-              {replicas.map((rep) => (
-                <div key={rep.name} className="flex flex-col items-center gap-2">
-                  <div className="flex items-end gap-2 h-32">
-                    {/* CPU Bar */}
-                    {rep.cpu_pct != null ? (
-                      <div
-                        className="w-7 rounded-t flex items-center justify-center text-white font-mono text-[10px] font-bold shadow-sm transition-all"
-                        style={{
-                          height: `${Math.max(12, Math.min(100, rep.cpu_pct))}%`,
-                          backgroundColor: rep.color
-                        }}
-                        title={`CPU: ${rep.cpu_pct}% (${rep.cpu_raw})`}
-                      >
-                        {rep.cpu_pct > 5 ? `${rep.cpu_pct.toFixed(0)}%` : rep.cpu_raw}
-                      </div>
-                    ) : (
-                      <div className="w-7 bg-slate-200 rounded-t h-4 flex items-center justify-center text-[9px] font-mono text-slate-500">
-                        N/A
-                      </div>
-                    )}
-                    {/* Memory Bar */}
-                    {rep.mem_pct != null ? (
-                      <div
-                        className="w-7 bg-slate-300 rounded-t flex items-center justify-center text-slate-800 font-mono text-[10px] font-bold shadow-sm transition-all"
-                        style={{
-                          height: `${Math.max(12, Math.min(100, rep.mem_pct))}%`
-                        }}
-                        title={`Memory: ${rep.mem_pct}% (${rep.mem_raw})`}
-                      >
-                        {rep.mem_pct.toFixed(0)}%
-                      </div>
-                    ) : (
-                      <div className="w-7 bg-slate-200 rounded-t h-4 flex items-center justify-center text-[9px] font-mono text-slate-500">
-                        N/A
-                      </div>
-                    )}
-                  </div>
-                  <span className="font-mono text-xs font-semibold text-slate-800">
-                    {rep.name}
-                  </span>
-                </div>
-              ))}
-            </div>
-
-            <div className="flex items-center justify-center gap-6 pt-2 font-mono text-xs text-slate-500">
-              <div className="flex items-center gap-1.5">
-                <span className="w-3 h-3 rounded bg-blue-600" />
-                <span>CPU Compute Load</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <span className="w-3 h-3 rounded bg-slate-300" />
-                <span>Memory Allocated (RSS)</span>
-              </div>
-            </div>
-          </div>
-
-          {/* CHART D: Throughput & Error Dual-Axis - DYNAMICALLY PLOTTED */}
-          <div className="p-5 rounded-xl bg-white border border-slate-200 shadow-sm flex flex-col justify-between">
-            <div className="flex items-center justify-between mb-3">
-              <div>
-                <h3 className="font-bold text-slate-900 text-sm">Throughput vs Transient Errors</h3>
-                <span className="text-xs text-slate-500">System stability and error occurrence verification</span>
-              </div>
-              <span className="px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 font-mono text-xs font-bold border border-emerald-200">
-                SLO: 99.9% TARGET
-              </span>
-            </div>
-
-            <div className="w-full h-52 pt-2">
-              <svg className="w-full h-full" fill="none" viewBox="0 0 500 180">
-                <line stroke="#E2E8F0" strokeDasharray="2 2" x1="40" x2="460" y1="30" y2="30" />
-                <line stroke="#E2E8F0" strokeDasharray="2 2" x1="40" x2="460" y1="80" y2="80" />
-                <line stroke="#E2E8F0" strokeDasharray="2 2" x1="40" x2="460" y1="130" y2="130" />
-                <text fill="#737686" fontFamily="JetBrains Mono" fontSize="10" textAnchor="end" x="35" y="34">20 rps</text>
-                <text fill="#737686" fontFamily="JetBrains Mono" fontSize="10" textAnchor="end" x="35" y="84">10 rps</text>
-                <text fill="#737686" fontFamily="JetBrains Mono" fontSize="10" textAnchor="end" x="35" y="134">0 rps</text>
-                <text fill="#EF4444" fontFamily="JetBrains Mono" fontSize="10" x="465" y="34">1.0%</text>
-                <text fill="#EF4444" fontFamily="JetBrains Mono" fontSize="10" x="465" y="84">0.5%</text>
-                <text fill="#EF4444" fontFamily="JetBrains Mono" fontSize="10" x="465" y="134">0.0%</text>
-
-                {/* Real Dynamic Throughput Line */}
-                <path
-                  d={generateChartPath(historyThroughput, 500, 180, 40, 40, 30, 40, 20)}
-                  fill="none"
-                  stroke="#2563EB"
-                  strokeWidth="2.5"
-                />
-
-                {/* Real Error occurrences only if error count > 0 */}
-                {summary.total_errors > 0 ? (
-                  <rect fill="#EF4444" height="20" rx="1" width="8" x="280" y="140" />
-                ) : (
-                  <circle cx="280" cy="155" r="2" fill="#10B981" />
-                )}
-              </svg>
-            </div>
-
-            <div className="flex items-center justify-center gap-6 pt-2 font-mono text-xs text-slate-500">
-              <div className="flex items-center gap-1.5">
-                <span className="w-3 h-0.5 bg-blue-600" />
-                <span>Throughput (req/s)</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <span className="w-2.5 h-2.5 rounded bg-red-500" />
-                <span>Transient 5xx Errors ({summary.error_rate_pct}%)</span>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* ==================== SECTION 5: REPLICA DIAGNOSTICS & EXPERIMENT CONTROL ==================== */}
-        <div className="grid grid-cols-1 xl:grid-cols-12 gap-5">
-          {/* Left Column (8 Cols): Diagnostics Table */}
-          <div className="xl:col-span-8 p-5 rounded-xl bg-white border border-slate-200 shadow-sm flex flex-col justify-between">
+        <section aria-label="Inference replica diagnostics" className="w-full">
+          {/* Replica diagnostics table */}
+          <div className="min-w-0 rounded-2xl border border-slate-200/70 bg-white p-5 shadow-[0_10px_28px_rgba(15,23,42,0.04)] sm:p-6 flex flex-col justify-between">
             <div>
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4">
                 <div>
@@ -1340,19 +992,331 @@ export const InferenceMonitoringPage: React.FC = () => {
             </div>
           </div>
 
-          {/* Right Column (4 Cols): Automatic Traffic Generator */}
-          <div className="xl:col-span-4">
-            <AutoTrafficGenerator
-              activeStrategy={activeStrategy}
-              activeStrategyTitle={activeStrategyTitle}
-              isGatewayActive={isGatewayActive}
-              onTrafficDispatched={handleAutoTrafficDispatched}
-              onActiveTrafficChange={setIsGeneratingTraffic}
-            />
+        </section>
+
+        {/* Performance and resource charts */}
+        <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
+          {/* CHART A: Latency Over Time - REAL OBSERVATIONS */}
+          <div className="min-w-0 rounded-2xl border border-slate-200/70 bg-white p-5 shadow-[0_10px_28px_rgba(15,23,42,0.04)] sm:p-6 flex flex-col justify-between">
+            <div className="flex items-center justify-between mb-3">
+              <div>
+                <div className="flex items-center gap-2">
+                  <h3 className="font-bold text-slate-900 text-sm">Latency Distribution Over Time</h3>
+                  <span className="px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 font-mono text-[10px] font-bold border border-emerald-200">
+                    REAL OBSERVATIONS
+                  </span>
+                </div>
+                <span className="text-xs text-slate-500">P50 vs P95 vs P99 response time in milliseconds</span>
+              </div>
+              <div className="flex items-center gap-1 bg-slate-100 p-0.5 rounded-lg text-xs">
+                {(['5m', '15m', '1h'] as const).map((w) => (
+                  <button
+                    key={w}
+                    onClick={() => setChartTimeWindow(w)}
+                    className={`px-2 py-0.5 rounded font-medium transition-all ${
+                      chartTimeWindow === w ? 'bg-white shadow-sm text-slate-900' : 'text-slate-500 hover:text-slate-800'
+                    }`}
+                  >
+                    {w}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Dynamic Latency SVG Chart */}
+            <div className="relative w-full h-52 pt-2">
+              <svg className="w-full h-full" fill="none" viewBox="0 0 500 180">
+                {/* Horizontal Grid */}
+                <line stroke="#E9EEF5" strokeDasharray="3 3" x1="40" x2="480" y1="20" y2="20" />
+                <line stroke="#E9EEF5" strokeDasharray="3 3" x1="40" x2="480" y1="60" y2="60" />
+                <line stroke="#E9EEF5" strokeDasharray="3 3" x1="40" x2="480" y1="100" y2="100" />
+                <line stroke="#E9EEF5" strokeDasharray="3 3" x1="40" x2="480" y1="140" y2="140" />
+
+                {/* Y-Axis Labels */}
+                <text fill="#737686" fontFamily="JetBrains Mono" fontSize="10" textAnchor="end" x="35" y="24">500ms</text>
+                <text fill="#737686" fontFamily="JetBrains Mono" fontSize="10" textAnchor="end" x="35" y="64">350ms</text>
+                <text fill="#737686" fontFamily="JetBrains Mono" fontSize="10" textAnchor="end" x="35" y="104">200ms</text>
+                <text fill="#737686" fontFamily="JetBrains Mono" fontSize="10" textAnchor="end" x="35" y="144">50ms</text>
+
+                {/* Real Dynamic P99 Line (Red, Dashed) */}
+                <path
+                  d={generateChartPath(historyLatencyP99, 500, 180, 40, 20, 20, 40, 500)}
+                  fill="none"
+                  stroke="#D99A9A"
+                  strokeDasharray="4 4"
+                  strokeLinecap="round"
+                  strokeWidth="1.5"
+                />
+
+                {/* Real Dynamic P95 Line (Blue) */}
+                <path
+                  d={generateChartPath(historyLatencyP95, 500, 180, 40, 20, 20, 40, 500)}
+                  fill="none"
+                  stroke="#7695E8"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth="2"
+                />
+
+                {/* Real Dynamic P50 Line (Green) */}
+                <path
+                  d={generateChartPath(historyLatencyP50, 500, 180, 40, 20, 20, 40, 500)}
+                  fill="none"
+                  stroke="#62AA97"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth="1.8"
+                />
+              </svg>
+
+              {/* Tooltip Overlay displaying real measured values */}
+              <div className="absolute right-4 top-3 rounded-xl border border-slate-200 bg-white/95 p-2.5 font-mono text-[11px] text-slate-700 shadow-sm sm:right-8">
+                <div className="text-teal-700 font-semibold mb-1">
+                  Active Latency Observation
+                </div>
+                <div className="flex justify-between gap-4 text-slate-600">
+                  <span>P99:</span>
+                  <span className="font-bold text-slate-900">
+                    {summary.p99_latency_ms != null ? `${summary.p99_latency_ms.toFixed(1)} ms` : 'N/A (n<10)'}
+                  </span>
+                </div>
+                <div className="flex justify-between gap-4 text-blue-700">
+                  <span>P95:</span>
+                  <span className="font-bold text-slate-900">
+                    {summary.p95_latency_ms != null ? `${summary.p95_latency_ms.toFixed(1)} ms` : 'N/A (n<5)'}
+                  </span>
+                </div>
+                <div className="flex justify-between gap-4 text-teal-700">
+                  <span>P50:</span>
+                  <span className="font-bold text-slate-900">
+                    {summary.p50_latency_ms != null ? `${summary.p50_latency_ms.toFixed(1)} ms` : 'N/A'}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Legend */}
+            <div className="flex items-center justify-center gap-6 pt-2 font-mono text-xs text-slate-500">
+              <div className="flex items-center gap-1.5">
+                <span className="w-3 h-0.5 bg-red-500" />
+                <span>P99 (Max Jitter)</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="w-3 h-1 bg-blue-600 rounded" />
+                <span className="font-semibold text-slate-900">P95</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="w-3 h-0.5 bg-emerald-500" />
+                <span>P50 (Median)</span>
+              </div>
+            </div>
+          </div>
+
+          {/* CHART B: Request Distribution by Replica - OBSERVED DATA */}
+          <div className="min-w-0 rounded-2xl border border-slate-200/70 bg-white p-5 shadow-[0_10px_28px_rgba(15,23,42,0.04)] sm:p-6 flex flex-col justify-between">
+            <div className="flex items-center justify-between mb-3">
+              <div>
+                <h3 className="font-bold text-slate-900 text-sm">Request Distribution by Replica</h3>
+                <span className="text-xs text-slate-500">Observed traffic share across backend pod replicas</span>
+              </div>
+              <span className="font-mono text-xs bg-slate-100 px-2 py-0.5 rounded text-slate-700 font-medium">
+                Normalized %
+              </span>
+            </div>
+
+            {/* Stacked Proportional Visualization */}
+            <div className="w-full h-52 flex flex-col justify-center px-4">
+              {summary.total_requests > 0 ? (
+                <div className="space-y-4">
+                  <div className="w-full bg-slate-100 h-8 rounded-lg flex overflow-hidden shadow-inner">
+                    {replicas.map((rep) => (
+                      <div
+                        key={rep.name}
+                        style={{
+                          width: `${rep.traffic_share_pct}%`,
+                          backgroundColor: rep.color
+                        }}
+                        className="h-full flex items-center justify-center text-white font-mono text-xs font-bold transition-all"
+                        title={`${rep.name}: ${rep.traffic_share_pct}% (${rep.requests_served} reqs)`}
+                      >
+                        {rep.traffic_share_pct > 15 ? `${rep.traffic_share_pct}%` : ''}
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Per-replica breakdown bars */}
+                  <div className="space-y-2 font-mono text-xs">
+                    {replicas.map((rep) => (
+                      <div key={rep.name} className="flex items-center justify-between p-2 rounded bg-slate-50 border border-slate-100">
+                        <div className="flex items-center gap-2">
+                          <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: rep.color }} />
+                          <span className="font-bold text-slate-900">{rep.name}</span>
+                          <span className="text-slate-400 text-[11px]">({rep.pod_ip})</span>
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <span className="text-slate-600">{rep.requests_served} requests</span>
+                          <span className="font-bold" style={{ color: rep.color }}>{rep.traffic_share_pct}%</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <div className="text-center py-12 text-slate-400 font-mono text-xs">
+                  No requests recorded yet. Dispatch test requests to view distribution.
+                </div>
+              )}
+            </div>
+
+            {/* Legend with Live Shares */}
+            <div className="flex items-center justify-center gap-6 pt-2 font-mono text-xs">
+              {replicas.map((rep) => (
+                <div key={rep.name} className="flex items-center gap-1.5">
+                  <span className="w-3 h-3 rounded" style={{ backgroundColor: rep.color }} />
+                  <span className="text-slate-900 font-medium">
+                    {rep.name} ({rep.traffic_share_pct}%)
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* CHART C: Pod Compute Saturation - REAL METRICS SERVER DATA */}
+          <div className="min-w-0 rounded-2xl border border-slate-200/70 bg-white p-5 shadow-[0_10px_28px_rgba(15,23,42,0.04)] sm:p-6 flex flex-col justify-between">
+            <div className="flex items-center justify-between mb-3">
+              <div>
+                <h3 className="font-bold text-slate-900 text-sm">Pod Compute Saturation</h3>
+                <span className="text-xs text-slate-500">
+                  Real CPU Core Load % vs Memory Resident Set (RSS) % from K8s Metrics Server
+                </span>
+              </div>
+              <Cpu size={18} className="text-slate-400" />
+            </div>
+
+            {/* Resource Bars */}
+            <div className="w-full h-52 flex items-end justify-around px-8 pt-4 pb-2 bg-gradient-to-b from-slate-50/40 to-white rounded-2xl border border-slate-100/80">
+              {replicas.map((rep) => (
+                <div key={rep.name} className="flex flex-col items-center gap-2">
+                  <div className="flex items-end gap-2 h-32">
+                    {/* CPU Bar */}
+                    {rep.cpu_pct != null ? (
+                      <div
+                        className="w-8 rounded-t-lg flex items-center justify-center text-white/95 font-mono text-[10px] font-semibold transition-all"
+                        style={{
+                          height: `${Math.max(12, Math.min(100, rep.cpu_pct))}%`,
+                          backgroundColor: rep.color
+                        }}
+                        title={`CPU: ${rep.cpu_pct}% (${rep.cpu_raw})`}
+                      >
+                        {rep.cpu_pct > 5 ? `${rep.cpu_pct.toFixed(0)}%` : rep.cpu_raw}
+                      </div>
+                    ) : (
+                      <div className="w-7 bg-slate-200 rounded-t h-4 flex items-center justify-center text-[9px] font-mono text-slate-500">
+                        N/A
+                      </div>
+                    )}
+                    {/* Memory Bar */}
+                    {rep.mem_pct != null ? (
+                      <div
+                        className="w-8 bg-slate-300/75 rounded-t-lg flex items-center justify-center text-slate-700 font-mono text-[10px] font-semibold transition-all"
+                        style={{
+                          height: `${Math.max(12, Math.min(100, rep.mem_pct))}%`
+                        }}
+                        title={`Memory: ${rep.mem_pct}% (${rep.mem_raw})`}
+                      >
+                        {rep.mem_pct.toFixed(0)}%
+                      </div>
+                    ) : (
+                      <div className="w-7 bg-slate-200 rounded-t h-4 flex items-center justify-center text-[9px] font-mono text-slate-500">
+                        N/A
+                      </div>
+                    )}
+                  </div>
+                  <span className="font-mono text-xs font-semibold text-slate-800">
+                    {rep.name}
+                  </span>
+                </div>
+              ))}
+            </div>
+
+            <div className="flex items-center justify-center gap-6 pt-2 font-mono text-xs text-slate-500">
+              <div className="flex items-center gap-1.5">
+                <span className="w-3 h-3 rounded bg-blue-600" />
+                <span>CPU Compute Load</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="w-3 h-3 rounded bg-slate-300" />
+                <span>Memory Allocated (RSS)</span>
+              </div>
+            </div>
+          </div>
+
+          {/* CHART D: Throughput & Error Dual-Axis - DYNAMICALLY PLOTTED */}
+          <div className="min-w-0 rounded-2xl border border-slate-200/70 bg-white p-5 shadow-[0_10px_28px_rgba(15,23,42,0.04)] sm:p-6 flex flex-col justify-between">
+            <div className="flex items-center justify-between mb-3">
+              <div>
+                <h3 className="font-bold text-slate-900 text-sm">Throughput vs Transient Errors</h3>
+                <span className="text-xs text-slate-500">System stability and error occurrence verification</span>
+              </div>
+              <span className="px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 font-mono text-xs font-bold border border-emerald-200">
+                SLO: 99.9% TARGET
+              </span>
+            </div>
+
+            <div className="w-full h-52 pt-2">
+              <svg className="w-full h-full" fill="none" viewBox="0 0 500 180">
+                <line stroke="#E9EEF5" strokeDasharray="2 2" x1="40" x2="460" y1="30" y2="30" />
+                <line stroke="#E9EEF5" strokeDasharray="2 2" x1="40" x2="460" y1="80" y2="80" />
+                <line stroke="#E9EEF5" strokeDasharray="2 2" x1="40" x2="460" y1="130" y2="130" />
+                <text fill="#737686" fontFamily="JetBrains Mono" fontSize="10" textAnchor="end" x="35" y="34">20 rps</text>
+                <text fill="#737686" fontFamily="JetBrains Mono" fontSize="10" textAnchor="end" x="35" y="84">10 rps</text>
+                <text fill="#737686" fontFamily="JetBrains Mono" fontSize="10" textAnchor="end" x="35" y="134">0 rps</text>
+                <text fill="#EF4444" fontFamily="JetBrains Mono" fontSize="10" x="465" y="34">1.0%</text>
+                <text fill="#EF4444" fontFamily="JetBrains Mono" fontSize="10" x="465" y="84">0.5%</text>
+                <text fill="#EF4444" fontFamily="JetBrains Mono" fontSize="10" x="465" y="134">0.0%</text>
+
+                {/* Real Dynamic Throughput Line */}
+                <path
+                  d={generateChartPath(historyThroughput, 500, 180, 40, 40, 30, 40, 20)}
+                  fill="none"
+                  stroke="#7695E8"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth="2"
+                />
+
+                {/* Real Error occurrences only if error count > 0 */}
+                {summary.total_errors > 0 ? (
+                  <rect fill="#EF4444" height="20" rx="1" width="8" x="280" y="140" />
+                ) : (
+                  <circle cx="280" cy="155" r="2" fill="#10B981" />
+                )}
+              </svg>
+            </div>
+
+            <div className="flex items-center justify-center gap-6 pt-2 font-mono text-xs text-slate-500">
+              <div className="flex items-center gap-1.5">
+                <span className="w-3 h-0.5 bg-blue-600" />
+                <span>Throughput (req/s)</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="w-2.5 h-2.5 rounded bg-red-500" />
+                <span>Transient 5xx Errors ({summary.error_rate_pct}%)</span>
+              </div>
+            </div>
           </div>
         </div>
 
-        {/* ==================== SECTION 6: REAL-TIME REQUEST ACTIVITY LOG ==================== */}
+        {/* Request execution timeline */}
+        <GanttRequestTimeline
+          events={allTimelineEvents}
+          replicas={replicas}
+          windowSize={ganttWindowSize}
+          onWindowSizeChange={setGanttWindowSize}
+          onClearEvents={() => setClearedEventIds(new Set(allTimelineEvents.map(e => e.request_id)))}
+        />
+
+        {/* Request activity log */}
         <div className="w-full p-5 sm:p-6 rounded-xl bg-white border border-slate-200 shadow-sm">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
             <div>
@@ -1477,42 +1441,22 @@ export const InferenceMonitoringPage: React.FC = () => {
           </div>
         </div>
 
-        {/* ==================== SECTION 7: PROMETHEUS & GRAFANA STATUS ==================== */}
-        <div className="w-full p-5 rounded-xl bg-slate-900 text-white shadow-sm">
-          <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-            <div>
-              <div className="flex items-center gap-2.5 mb-1">
-                <div className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping" />
-                <h4 className="font-bold text-sm text-white">Cluster Telemetry Engine: Prometheus & Grafana Online</h4>
-                <span className="px-2 py-0.5 rounded bg-emerald-950 text-emerald-400 border border-emerald-800 font-mono text-[10px] font-bold">
-                  INTERNAL SERVICE MESH
-                </span>
-              </div>
-              <p className="text-xs text-slate-400 max-w-2xl">
-                Prometheus is actively scraping all 3 inference replicas at 3-second intervals using Kubernetes endpoint discovery. Grafana is provisioned with the dedicated MLOps Inference Monitoring dashboard.
-              </p>
+        <details className="group rounded-2xl border border-slate-200/70 bg-white shadow-sm">
+          <summary className="flex cursor-pointer list-none items-center justify-between gap-4 px-5 py-4 text-sm font-semibold text-slate-800">
+            <span>External metrics tools</span>
+            <span className="text-xs font-medium text-slate-500 transition-colors group-open:text-blue-700">Optional access</span>
+          </summary>
+          <div className="grid gap-3 border-t border-slate-100 px-5 py-4 text-xs sm:grid-cols-2">
+            <div className="min-w-0 rounded-xl bg-slate-50 p-3">
+              <p className="mb-1 font-medium text-slate-600">Prometheus</p>
+              <code className="block break-all font-mono text-slate-700">kubectl port-forward -n mlops svc/prometheus 9090:9090</code>
             </div>
-
-            <div className="flex items-center gap-3 font-mono text-xs">
-              <div className="px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-slate-300">
-                <span className="text-slate-500 mr-1.5">Grafana Port-Forward:</span>
-                <span className="text-emerald-400 font-semibold select-all">kubectl port-forward -n mlops svc/grafana 3000:3000</span>
-              </div>
+            <div className="min-w-0 rounded-xl bg-slate-50 p-3">
+              <p className="mb-1 font-medium text-slate-600">Grafana</p>
+              <code className="block break-all font-mono text-slate-700">kubectl port-forward -n mlops svc/grafana 3000:3000</code>
             </div>
           </div>
-        </div>
-
-        {/* ==================== FOOTER ==================== */}
-        <div className="flex flex-col sm:flex-row items-center justify-between gap-2 pt-2 text-slate-400 text-xs">
-          <div className="flex items-center gap-2">
-            <span className="font-semibold text-slate-600">Nexus MLOps Platform</span>
-            <span>•</span>
-            <span>Academic & Research Edition</span>
-          </div>
-          <div className="font-mono text-[11px] text-slate-400">
-            Engine: Kubernetes v1.37 • Telemetry: Prometheus / Grafana / Metrics Server
-          </div>
-        </div>
+        </details>
       </div>
 
       {/* ==================== INSPECT REPLICA MODAL ==================== */}

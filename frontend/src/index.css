@@ -72,6 +72,73 @@ body {
 [data-theme="dark"] .bg-blue-50 { background-color: rgba(59,130,246,0.1) !important; }
 [data-theme="dark"] .bg-indigo-50 { background-color: rgba(79,70,229,0.15) !important; }
 [data-theme="dark"] .bg-red-50 { background-color: rgba(239,68,68,0.1) !important; }
+/* Complete dark palette coverage for Tailwind opacity utilities and accent surfaces.
+   Utility classes with `/NN` are separate class names, so the exact selectors above
+   do not match them. */
+[data-theme="dark"] [class*="bg-slate-50/"] { background-color: #1b232e !important; }
+[data-theme="dark"] [class*="bg-slate-100/"] { background-color: #202a36 !important; }
+[data-theme="dark"] [class*="bg-white/"] { background-color: #151b24 !important; }
+[data-theme="dark"] [class*="bg-slate-200"] { background-color: #293544 !important; }
+[data-theme="dark"] [class*="bg-slate-300"] { background-color: #445164 !important; }
+
+[data-theme="dark"] [class*="bg-blue-50"] { background-color: rgba(59,130,246,0.14) !important; }
+[data-theme="dark"] [class*="bg-indigo-50"] { background-color: rgba(99,102,241,0.15) !important; }
+[data-theme="dark"] [class*="bg-violet-50"] { background-color: rgba(139,92,246,0.16) !important; }
+[data-theme="dark"] [class*="bg-emerald-50"] { background-color: rgba(16,185,129,0.14) !important; }
+[data-theme="dark"] [class*="bg-green-50"] { background-color: rgba(34,197,94,0.14) !important; }
+[data-theme="dark"] [class*="bg-amber-50"] { background-color: rgba(245,158,11,0.14) !important; }
+[data-theme="dark"] [class*="bg-rose-50"],
+[data-theme="dark"] [class*="bg-red-50"] { background-color: rgba(244,63,94,0.14) !important; }
+[data-theme="dark"] [class*="bg-purple-50"] { background-color: rgba(147,51,234,0.14) !important; }
+[data-theme="dark"] [class*="bg-indigo-100"] { background-color: rgba(99,102,241,0.2) !important; }
+
+[data-theme="dark"] [class*="border-slate-200"] { border-color: #303b49 !important; }
+[data-theme="dark"] [class*="border-slate-100"] { border-color: #252f3c !important; }
+[data-theme="dark"] [class*="border-slate-300"] { border-color: #3b4858 !important; }
+[data-theme="dark"] [class*="border-violet-100"],
+[data-theme="dark"] [class*="border-violet-200"] { border-color: rgba(167,139,250,0.38) !important; }
+[data-theme="dark"] [class*="border-blue-100"],
+[data-theme="dark"] [class*="border-blue-200"] { border-color: rgba(96,165,250,0.35) !important; }
+[data-theme="dark"] [class*="border-emerald-100"],
+[data-theme="dark"] [class*="border-emerald-200"] { border-color: rgba(52,211,153,0.34) !important; }
+[data-theme="dark"] [class*="border-amber-100"],
+[data-theme="dark"] [class*="border-amber-200"] { border-color: rgba(251,191,36,0.34) !important; }
+[data-theme="dark"] [class*="border-rose-100"],
+[data-theme="dark"] [class*="border-rose-200"],
+[data-theme="dark"] [class*="border-red-100"],
+[data-theme="dark"] [class*="border-red-200"] { border-color: rgba(251,113,133,0.34) !important; }
+
+/* Deep accent text appears on tinted surfaces; lift it for dark-mode contrast. */
+[data-theme="dark"] [class~="text-blue-900"] { color: #bfdbfe !important; }
+[data-theme="dark"] [class~="text-indigo-800"],
+[data-theme="dark"] [class~="text-indigo-900"] { color: #c7d2fe !important; }
+[data-theme="dark"] [class~="text-violet-900"] { color: #ddd6fe !important; }
+[data-theme="dark"] [class~="text-emerald-800"],
+[data-theme="dark"] [class~="text-emerald-900"] { color: #a7f3d0 !important; }
+[data-theme="dark"] [class~="text-green-900"] { color: #bbf7d0 !important; }
+[data-theme="dark"] [class~="text-amber-800"],
+[data-theme="dark"] [class~="text-amber-900"] { color: #fde68a !important; }
+[data-theme="dark"] [class~="text-rose-800"],
+[data-theme="dark"] [class~="text-rose-900"],
+[data-theme="dark"] [class~="text-red-800"],
+[data-theme="dark"] [class~="text-red-900"] { color: #fecdd3 !important; }
+[data-theme="dark"] [class*="text-indigo-700/"] { color: #a5b4fc !important; }
+
+/* Keep neutral resource-chart gradients dark instead of leaking light stops. */
+[data-theme="dark"] [class*="from-slate-50"] {
+  --tw-gradient-from: #1b232e !important;
+  --tw-gradient-to: rgb(27 35 46 / 0) !important;
+}
+[data-theme="dark"] [class*="to-slate-50"] { --tw-gradient-to: #111720 !important; }
+[data-theme="dark"] [class*="to-white"] { --tw-gradient-to: #151b24 !important; }
+
+/* KPI cards use white gradient stops in light mode. Remove that gradient in
+   dark mode so card surfaces and their light text retain clear contrast. */
+[data-theme="dark"] [class*="from-white"][class*="via-white"][class*="to-slate-50"] {
+  background-color: #151b24 !important;
+  background-image: none !important;
+}
+
 /* Inputs, selects, textareas */
 [data-theme="dark"] input,
 [data-theme="dark"] select,

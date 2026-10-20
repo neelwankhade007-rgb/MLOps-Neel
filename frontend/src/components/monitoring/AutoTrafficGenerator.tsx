@@ -138,7 +138,7 @@ export const AutoTrafficGenerator: React.FC<AutoTrafficGeneratorProps> = ({
   };
 
   return (
-    <div className="w-full rounded-2xl bg-white border border-slate-200/80 shadow-sm p-5 sm:p-6 mt-6">
+    <div className="w-full rounded-2xl border border-slate-200/70 bg-white p-5 shadow-[0_10px_28px_rgba(15,23,42,0.04)] sm:p-6">
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pb-4 mb-5 border-b border-slate-100">
         <div className="flex items-center gap-3">
           <div className={`p-2 rounded-xl border ${
@@ -158,7 +158,7 @@ export const AutoTrafficGenerator: React.FC<AutoTrafficGeneratorProps> = ({
                   ? 'bg-amber-50 text-amber-700 border-amber-200'
                   : 'bg-slate-100 text-slate-600 border-slate-200'
               }`}>
-                <span className={`w-1.5 h-1.5 rounded-full ${isRunning ? 'bg-emerald-500 animate-ping' : 'bg-slate-400'}`} />
+                <span className={`w-1.5 h-1.5 rounded-full ${isRunning ? 'bg-emerald-500' : 'bg-slate-400'}`} />
                 {isRunning ? 'RUNNING' : isStopping ? 'STOPPING...' : runStatus.toUpperCase()}
               </span>
             </h3>
@@ -202,8 +202,8 @@ export const AutoTrafficGenerator: React.FC<AutoTrafficGeneratorProps> = ({
       </div>
 
       {/* Locust run configuration */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-4 mb-5">
-        <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/80">
+      <div className="mb-5 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
+        <div className="rounded-xl border border-slate-200/70 bg-slate-50/60 p-3.5">
           <label className="text-xs font-bold text-slate-800 flex items-center gap-1.5 mb-2">
             <ShieldCheck size={14} className="text-blue-600" /> Deployment
           </label>
@@ -213,32 +213,32 @@ export const AutoTrafficGenerator: React.FC<AutoTrafficGeneratorProps> = ({
           </select>
         </div>
 
-        <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/80">
+        <div className="rounded-xl border border-slate-200/70 bg-slate-50/60 p-3.5">
           <label className="text-xs font-bold text-slate-800 flex items-center gap-1.5 mb-2"><Activity size={14} className="text-blue-600" />Concurrent users</label>
           <input type="number" min="1" max="50" step="1" value={users} disabled={isRunning} onChange={(e) => setUsers(Math.max(1, Math.min(50, Number(e.target.value))))} className="w-full rounded-lg border border-slate-200 bg-white p-2 font-mono text-sm disabled:opacity-50" />
           <span className="text-[10px] text-slate-500 mt-1 block">Locust users sending requests concurrently (1–50).</span>
         </div>
 
-        <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/80">
+        <div className="rounded-xl border border-slate-200/70 bg-slate-50/60 p-3.5">
           <label className="text-xs font-bold text-slate-800 flex items-center gap-1.5 mb-2"><Zap size={14} className="text-blue-600" />Target request rate</label>
           <input type="number" min="0.1" max="50" step="0.5" value={targetRps} disabled={isRunning} onChange={(e) => setTargetRps(Math.max(0.1, Math.min(50, Number(e.target.value))))} className="w-full rounded-lg border border-slate-200 bg-white p-2 font-mono text-sm disabled:opacity-50" />
           <span className="text-[10px] text-slate-500 mt-1 block">Aggregate ceiling across all users (req/s).</span>
         </div>
 
-        <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/80">
+        <div className="rounded-xl border border-slate-200/70 bg-slate-50/60 p-3.5">
           <label className="text-xs font-bold text-slate-800 flex items-center gap-1.5 mb-2"><Clock size={14} className="text-blue-600" />Duration</label>
           <input type="number" min="1" max="300" step="1" value={durationSec} disabled={isRunning} onChange={(e) => setDurationSec(Math.max(1, Math.min(300, Number(e.target.value))))} className="w-full rounded-lg border border-slate-200 bg-white p-2 font-mono text-sm disabled:opacity-50" />
           <span className="text-[10px] text-slate-500 mt-1 block">Maximum run time in seconds (1–300).</span>
         </div>
 
-        <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/80">
+        <div className="rounded-xl border border-slate-200/70 bg-slate-50/60 p-3.5">
           <label className="text-xs font-bold text-slate-800 flex items-center gap-1.5 mb-2"><Sliders size={14} className="text-blue-600" />Request limit</label>
           <input type="number" min="1" max="10000" step="1" value={requestCap} disabled={isRunning} onChange={(e) => setRequestCap(Math.max(1, Math.min(10000, Number(e.target.value))))} className="w-full rounded-lg border border-slate-200 bg-white p-2 font-mono text-sm disabled:opacity-50" />
           <span className="text-[10px] text-slate-500 mt-1 block">Hard cap; the run stops at this count or duration.</span>
         </div>
 
         {/* Active policy echo */}
-        <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/80 flex flex-col justify-between">
+        <div className="flex flex-col justify-between rounded-xl border border-slate-200/70 bg-slate-50/60 p-3.5">
           <div>
             <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5 mb-1">
               <ShieldCheck size={14} className={isGatewayActive ? "text-emerald-600" : "text-blue-600"} />
@@ -257,8 +257,8 @@ export const AutoTrafficGenerator: React.FC<AutoTrafficGeneratorProps> = ({
       </div>
 
       {/* Live Generator Metrics Cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 pt-4 border-t border-slate-100">
-        <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/70">
+      <div className="grid grid-cols-2 gap-3 border-t border-slate-100 pt-4 sm:grid-cols-3 xl:grid-cols-5">
+        <div className="rounded-xl border border-slate-200/60 bg-slate-50/60 p-3">
           <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">
             Completed Requests
           </span>
@@ -267,7 +267,7 @@ export const AutoTrafficGenerator: React.FC<AutoTrafficGeneratorProps> = ({
           </span>
         </div>
 
-        <div className="p-3 rounded-xl bg-emerald-50/70 border border-emerald-200/70">
+        <div className="rounded-xl border border-emerald-100 bg-emerald-50/55 p-3">
           <span className="text-[10px] font-bold text-emerald-700 uppercase tracking-wider block">
             Succeeded (200)
           </span>
@@ -276,7 +276,7 @@ export const AutoTrafficGenerator: React.FC<AutoTrafficGeneratorProps> = ({
           </span>
         </div>
 
-        <div className="p-3 rounded-xl bg-rose-50/70 border border-rose-200/70">
+        <div className="rounded-xl border border-rose-100 bg-rose-50/55 p-3">
           <span className="text-[10px] font-bold text-rose-700 uppercase tracking-wider block">
             Failed / Errors
           </span>
@@ -285,7 +285,7 @@ export const AutoTrafficGenerator: React.FC<AutoTrafficGeneratorProps> = ({
           </span>
         </div>
 
-        <div className="p-3 rounded-xl bg-amber-50/70 border border-amber-200/70">
+        <div className="rounded-xl border border-amber-100 bg-amber-50/55 p-3">
           <span className="text-[10px] font-bold text-amber-700 uppercase tracking-wider block">
             Active Locust Users
           </span>
@@ -294,7 +294,7 @@ export const AutoTrafficGenerator: React.FC<AutoTrafficGeneratorProps> = ({
           </span>
         </div>
 
-        <div className="p-3 rounded-xl bg-blue-50/70 border border-blue-200/70">
+        <div className="rounded-xl border border-blue-100 bg-blue-50/55 p-3">
           <span className="text-[10px] font-bold text-blue-700 uppercase tracking-wider block">
             Observed Rate
           </span>

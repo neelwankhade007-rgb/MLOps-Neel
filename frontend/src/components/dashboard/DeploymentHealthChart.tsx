@@ -8,30 +8,26 @@ export interface DeploymentHealthItem {
 }
 
 export interface DeploymentHealthChartProps {
-  data?: DeploymentHealthItem[];
+  data: DeploymentHealthItem[];
   colors?: string[];
+  loading?: boolean;
 }
-
-const defaultData: DeploymentHealthItem[] = [
-  { name: 'Healthy', value: 2 },
-  { name: 'Warning', value: 1 },
-  { name: 'Failed', value: 0 },
-];
 
 const defaultColors = ['#22c55e', '#f59e0b', '#ef4444'];
 
 export const DeploymentHealthChart: React.FC<DeploymentHealthChartProps> = ({
-  data = defaultData,
+  data,
   colors = defaultColors,
+  loading = false,
 }) => {
   return (
     <Card className="p-6">
       <div className="mb-3">
-        <h2 className="text-lg font-bold text-slate-900">Deployment Health</h2>
-        <p className="text-sm text-slate-500">Current deployment status</p>
+        <h2 className="text-lg font-bold text-slate-900">Deployment Status</h2>
+        <p className="text-sm text-slate-500">Status values from saved deployment records</p>
       </div>
 
-      <div className="h-56">
+      {loading ? <div className="h-56 flex items-center justify-center text-sm text-slate-500">Loading deployments…</div> : data.length === 0 ? <div className="h-56 flex items-center justify-center text-sm text-slate-500">No deployment records available.</div> : <div className="h-56">
         <ResponsiveContainer width="100%" height="100%">
           <PieChart>
             <Pie
@@ -51,7 +47,7 @@ export const DeploymentHealthChart: React.FC<DeploymentHealthChartProps> = ({
             <Legend verticalAlign="bottom" height={36} />
           </PieChart>
         </ResponsiveContainer>
-      </div>
+      </div>}
     </Card>
   );
 };

@@ -36,6 +36,26 @@ export const GanttRequestTimeline: React.FC<GanttRequestTimelineProps> = ({
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [selectedEventModal, setSelectedEventModal] = useState<RecentEvent | null>(null);
 
+  const getEventEpoch = (event: RecentEvent): number | null => {
+    const explicitEpoch = Number(event.start_epoch_ms);
+    if (Number.isFinite(explicitEpoch) && explicitEpoch > 0) return explicitEpoch;
+
+    const timestamp = String(event.timestamp || '').trim();
+    const parsedTimestamp = Date.parse(timestamp);
+    if (Number.isFinite(parsedTimestamp)) return parsedTimestamp;
+
+    // Some pod events contain only a clock time (HH:mm:ss.SSS), not an ISO date.
+    const timeOnly = timestamp.match(/^(\d{1,2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?$/);
+    if (timeOnly) {
+      const date = new Date();
+      date.setHours(Number(timeOnly[1]), Number(timeOnly[2]), Number(timeOnly[3]), Number((timeOnly[4] || '0').padEnd(3, '0')));
+      let epoch = date.getTime();
+      if (epoch > Date.now() + 60_000) epoch -= 24 * 60 * 60 * 1000;
+      return epoch;
+    }
+    return null;
+  };
+
   // Filtered events bounded by windowSize
   const filteredEvents = useMemo(() => {
     return events
@@ -69,17 +89,23 @@ export const GanttRequestTimeline: React.FC<GanttRequestTimelineProps> = ({
   }, [events, filterPod, filterStatus, searchQuery, windowSize]);
 
   // Compute time window boundaries for Gantt projection
-  const { minEpoch, timeSpanMs } = useMemo(() => {
+  const { minEpoch, timeSpanMs, eventEpochs } = useMemo(() => {
     if (filteredEvents.length === 0) {
       const now = Date.now();
-      return { minEpoch: now - 10000, timeSpanMs: 10000 };
+      return { minEpoch: now - 10000, timeSpanMs: 10000, eventEpochs: new Map<RecentEvent, number>() };
     }
-    const epochs = filteredEvents.map((e) => e.start_epoch_ms || Date.now());
-    const durations = filteredEvents.map((e) => e.duration_ms || e.observed_latency_ms || 10);
+    const now = Date.now();
+    const eventEpochs = new Map<RecentEvent, number>();
+    filteredEvents.forEach((event, index) => {
+      // Telemetry is newest-first; this deterministic fallback preserves that order.
+      eventEpochs.set(event, getEventEpoch(event) ?? now - index * 100);
+    });
+    const epochs = filteredEvents.map((event) => eventEpochs.get(event)!);
     const min = Math.min(...epochs);
-    const max = Math.max(...epochs.map((ep, i) => ep + durations[i]));
-    const span = Math.max(3000, max - min + 500); // at least 3 seconds span
-    return { minEpoch: min, timeSpanMs: span };
+    const latest = Math.max(...epochs);
+    // Fit the axis to the observed request window so the latest events do not bunch at the left.
+    const span = Math.max(250, latest - min);
+    return { minEpoch: min, timeSpanMs: span, eventEpochs };
   }, [filteredEvents]);
 
   // Swimlanes: Group by known replica pods + Failed/Unassigned track
@@ -100,7 +126,7 @@ export const GanttRequestTimeline: React.FC<GanttRequestTimelineProps> = ({
   }, [replicas]);
 
   return (
-    <div className="w-full rounded-2xl bg-white border border-slate-200/80 shadow-sm p-5 sm:p-6 mt-6">
+    <div className="w-full rounded-2xl bg-white border border-slate-200/80 shadow-sm p-5 sm:p-6">
       {/* Header and Controls */}
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-4 mb-5 border-b border-slate-100">
         <div>
@@ -185,13 +211,13 @@ export const GanttRequestTimeline: React.FC<GanttRequestTimelineProps> = ({
       </div>
 
       {/* Gantt Visual Canvas Area */}
-      <div className="w-full rounded-xl bg-slate-900 border border-slate-800 text-white p-4 overflow-x-auto shadow-inner">
+      <div className="w-full rounded-xl bg-slate-50 border border-slate-200 text-slate-700 p-4 sm:p-5 overflow-x-auto">
         <div className="min-w-[700px]">
           {/* Time scale ruler */}
-          <div className="flex items-center justify-between text-[10px] font-mono text-slate-400 pb-2 mb-3 border-b border-slate-800">
-            <span>T-0s (Oldest in view)</span>
-            <span>Relative Time Axis (Span: {(timeSpanMs / 1000).toFixed(1)}s)</span>
-            <span>Now (Latest)</span>
+          <div className="flex items-center justify-between text-[10px] font-mono text-slate-500 pb-3 mb-3 border-b border-slate-200">
+            <span>Oldest request</span>
+            <span>Request timeline · {(timeSpanMs / 1000).toFixed(2)}s span</span>
+            <span>Latest request</span>
           </div>
 
           {/* Swimlanes for Each Pod Replica */}
@@ -213,6 +239,25 @@ export const GanttRequestTimeline: React.FC<GanttRequestTimelineProps> = ({
                 );
               });
 
+              const plottedEvents = laneEvents
+                .map((ev, index) => {
+                  const epoch = eventEpochs.get(ev) ?? minEpoch;
+                  const duration = ev.duration_ms || ev.observed_latency_ms || 10;
+                  const leftPct = Math.max(0, Math.min(99.2, ((epoch - minEpoch) / timeSpanMs) * 100));
+                  const widthPct = Math.max(0.65, Math.min(100 - leftPct, (duration / timeSpanMs) * 100));
+                  return { ev, index, duration, leftPct, widthPct };
+                })
+                .sort((a, b) => a.leftPct - b.leftPct);
+              const blockWidthPct = Math.min(1.2, Math.max(0.5, 55 / Math.max(laneEvents.length, 1)));
+              const minGapPct = 0.28;
+              let nextAvailablePct = 0;
+              const positionedEvents = plottedEvents.map((item) => {
+                // Keep every request on one track; nudge only colliding blocks to the next free slot.
+                const leftPct = Math.min(100 - blockWidthPct, Math.max(item.leftPct, nextAvailablePct));
+                nextAvailablePct = leftPct + blockWidthPct + minGapPct;
+                return { ...item, leftPct, widthPct: blockWidthPct };
+              });
+
               return (
                 <div key={lane.id} className="flex items-center gap-3">
                   {/* Pod Label */}
@@ -222,56 +267,50 @@ export const GanttRequestTimeline: React.FC<GanttRequestTimelineProps> = ({
                         className="w-2 h-2 rounded-full shrink-0"
                         style={{ backgroundColor: lane.color }}
                       />
-                      <span className="font-mono text-xs font-bold text-slate-200 truncate">
+                      <span className="font-mono text-xs font-semibold text-slate-700 truncate">
                         {lane.label}
                       </span>
                     </div>
-                    <span className="font-mono text-[9px] text-slate-400">
+                    <span className="font-mono text-[10px] text-slate-500">
                       {laneEvents.length}
                     </span>
                   </div>
 
                   {/* Track Bar with Plotted Request Spans */}
-                  <div className="relative flex-1 h-8 rounded-lg bg-slate-800/80 border border-slate-700/60 overflow-hidden">
-                    {/* Grid lines */}
-                    <div className="absolute inset-0 grid grid-cols-6 divide-x divide-slate-800/60 pointer-events-none" />
+                  <div className="relative flex-1 h-10 rounded-lg bg-white border border-slate-200 overflow-hidden">
+                    {/* Light time guides */}
+                    <div className="absolute inset-0 grid grid-cols-6 divide-x divide-slate-100 pointer-events-none" />
 
-                    {/* Plotted Events in this track */}
-                    {laneEvents.map((ev, i) => {
-                      const startEpoch = ev.start_epoch_ms || minEpoch;
-                      const duration = ev.duration_ms || ev.observed_latency_ms || 10;
-                      const leftPct = Math.max(0, Math.min(95, ((startEpoch - minEpoch) / timeSpanMs) * 100));
-                      const widthPct = Math.max(3, Math.min(100 - leftPct, (duration / timeSpanMs) * 100));
+                    {/* One compact block per request, aligned along a single horizontal row. */}
+                    {positionedEvents.map(({ ev, index, duration, leftPct, widthPct }) => {
                       const isSuccess = ev.http_status?.includes('200') || ev.status_code === 200;
-
                       return (
-                        <div
-                          key={ev.request_id || i}
+                        <button
+                          key={ev.request_id || index}
+                          type="button"
                           onClick={() => setSelectedEventModal(ev)}
-                          className={`absolute top-1 bottom-1 rounded cursor-pointer transition-all hover:scale-y-110 hover:z-30 flex items-center justify-between px-1.5 text-[9px] font-mono shadow-sm ${
+                          className={`absolute h-[14px] rounded-sm border px-1 text-[9px] leading-none font-mono transition-colors hover:z-30 ${
                             isSuccess
-                              ? 'bg-emerald-500/90 hover:bg-emerald-400 text-white border border-emerald-400'
-                              : 'bg-rose-500/90 hover:bg-rose-400 text-white border border-rose-400'
+                              ? 'bg-emerald-100 hover:bg-emerald-200 text-emerald-800 border-emerald-300'
+                              : 'bg-rose-100 hover:bg-rose-200 text-rose-800 border-rose-300'
                           }`}
                           style={{
                             left: `${leftPct}%`,
                             width: `${widthPct}%`,
+                            top: '50%',
+                            transform: 'translateY(-50%)',
                           }}
                           title={`Request: ${ev.request_id}\nPod: ${ev.assigned_pod}\nLatency: ${duration}ms\nStatus: ${ev.http_status}`}
+                          aria-label={`Inspect request ${ev.request_id}, ${duration} milliseconds, ${ev.http_status}`}
                         >
-                          <span className="truncate max-w-[80px] font-semibold">
-                            {ev.request_id?.slice(-5) || '#req'}
-                          </span>
-                          <span className="text-[8px] opacity-90 hidden sm:inline">
-                            {Math.round(duration)}ms
-                          </span>
-                        </div>
+                          {widthPct > 2.5 ? ev.request_id?.slice(-4) || '#req' : ''}
+                        </button>
                       );
                     })}
 
                     {/* In flight requests indicator for active pods */}
                     {inFlightRequests.length > 0 && lane.id !== 'unassigned' && (
-                      <div className="absolute right-1 top-1 bottom-1 w-6 rounded bg-amber-500/60 animate-pulse border border-amber-400 flex items-center justify-center text-[8px] font-bold text-amber-100">
+                      <div className="absolute right-1 top-1 w-7 h-5 rounded bg-amber-100 border border-amber-300 flex items-center justify-center text-[8px] font-bold text-amber-800">
                         IN
                       </div>
                     )}
@@ -287,15 +326,15 @@ export const GanttRequestTimeline: React.FC<GanttRequestTimelineProps> = ({
       <div className="flex flex-wrap items-center justify-between pt-3 mt-4 text-xs text-slate-500 border-t border-slate-100">
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-1.5">
-            <span className="w-3 h-3 rounded bg-emerald-500 border border-emerald-600" />
+            <span className="w-3 h-3 rounded bg-emerald-100 border border-emerald-300" />
             <span className="text-slate-700">200 OK (Completed)</span>
           </div>
           <div className="flex items-center gap-1.5">
-            <span className="w-3 h-3 rounded bg-rose-500 border border-rose-600" />
+            <span className="w-3 h-3 rounded bg-rose-100 border border-rose-300" />
             <span className="text-slate-700">Error / Non-200</span>
           </div>
           <div className="flex items-center gap-1.5">
-            <span className="w-3 h-3 rounded bg-amber-500 border border-amber-600 animate-pulse" />
+            <span className="w-3 h-3 rounded bg-amber-100 border border-amber-300" />
             <span className="text-slate-700">In-Flight</span>
           </div>
         </div>
