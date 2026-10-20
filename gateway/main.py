@@ -188,3 +188,43 @@ def list_replicas():
         "endpoints": router.endpoints,
         "count": router.endpoint_count,
     }
+
+
+# -- weights and configuration --------------------------------------------
+
+from pydantic import BaseModel
+
+
+class WeightsPayload(BaseModel):
+    weights: list[int]
+
+
+class AdaptiveWeightsPayload(BaseModel):
+    weights: dict[str, float]
+
+
+@app.get("/weights")
+def get_weights():
+    return {
+        "weights": router.weights,
+        "wrr_weights": router.weights,
+        "adaptive_weights": getattr(router, "adaptive_weights", {"latency": 0.4, "active": 0.3, "cpu": 0.2, "error": 0.1}),
+    }
+
+
+@app.put("/weights")
+def update_weights(payload: WeightsPayload):
+    try:
+        updated = router.set_weights(payload.weights)
+        return {"status": "ok", "weights": updated, "wrr_weights": updated}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.put("/adaptive-weights")
+def update_adaptive_weights(payload: AdaptiveWeightsPayload):
+    try:
+        updated = router.set_adaptive_weights(payload.weights)
+        return {"status": "ok", "adaptive_weights": updated}
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))

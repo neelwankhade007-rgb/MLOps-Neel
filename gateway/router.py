@@ -3,9 +3,11 @@ import socket
 import json
 import ssl
 import time
+import math
 import logging
 import threading
 import urllib.request
+from datetime import datetime, timezone
 from collections import deque
 from typing import Any, Dict, List, Optional
 
@@ -18,6 +20,14 @@ HEADLESS_DNS = os.environ.get(
 INFERENCE_PORT = int(os.environ.get("INFERENCE_PORT", "8000"))
 DISCOVERY_INTERVAL_S = float(os.environ.get("DISCOVERY_INTERVAL_S", "10"))
 ADAPTIVE_METRICS_INTERVAL_S = max(1.0, float(os.environ.get("ADAPTIVE_METRICS_INTERVAL_S", "5")))
+ADAPTIVE_EMA_ALPHA = float(os.environ.get("ADAPTIVE_EMA_ALPHA", "0.3"))
+if not 0.0 < ADAPTIVE_EMA_ALPHA <= 1.0:
+    raise ValueError("ADAPTIVE_EMA_ALPHA must be greater than 0 and at most 1")
+ADAPTIVE_METRIC_MAX_AGE_S = float(
+    os.environ.get("ADAPTIVE_METRIC_MAX_AGE_S", str(max(120.0, 3.0 * ADAPTIVE_METRICS_INTERVAL_S)))
+)
+if not math.isfinite(ADAPTIVE_METRIC_MAX_AGE_S) or ADAPTIVE_METRIC_MAX_AGE_S <= 0.0:
+    raise ValueError("ADAPTIVE_METRIC_MAX_AGE_S must be a finite positive number")
 K8S_API_URL = "https://kubernetes.default.svc"
 K8S_TOKEN_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/token"
 K8S_CA_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
@@ -48,7 +58,9 @@ class RoundRobinRouter:
         self._wrr_current: List[int] = []
         self._adaptive_index = 0
         self._observations: Dict[str, Dict[str, Any]] = {}
+        self._adaptive_ema: Dict[str, Dict[str, float]] = {}
         self._cpu_pct: Dict[str, float] = {}
+        self._cpu_sampled_at: Dict[str, float] = {}
         self._metrics_lock = threading.Lock()
         self._stop_event = threading.Event()
         self._discovery_thread: Optional[threading.Thread] = None
@@ -109,7 +121,13 @@ class RoundRobinRouter:
                     url: self._observations.get(url, self._new_observation())
                     for url in ready_urls
                 }
+                self._adaptive_ema = {
+                    url: self._adaptive_ema.get(url, {}) for url in ready_urls
+                }
                 self._cpu_pct = {url: value for url, value in self._cpu_pct.items() if url in ready_urls}
+                self._cpu_sampled_at = {
+                    url: value for url, value in self._cpu_sampled_at.items() if url in ready_urls
+                }
                 # Reset index to stay within bounds
                 if self._endpoints:
                     self._index = self._index % len(self._endpoints)
@@ -154,7 +172,33 @@ class RoundRobinRouter:
 
     @staticmethod
     def _new_observation() -> Dict[str, Any]:
-        return {"latencies": deque(maxlen=50), "errors": deque(maxlen=50), "active": 0}
+        return {
+            "latencies": deque(maxlen=50),
+            "errors": deque(maxlen=50),
+            "active": 0,
+            "latency_at": None,
+            "error_at": None,
+        }
+
+    @staticmethod
+    def _parse_metric_timestamp(value: Any) -> Optional[float]:
+        """Convert a Metrics Server RFC3339 timestamp to Unix seconds."""
+        if not isinstance(value, str) or not value.strip():
+            return None
+        try:
+            parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return parsed.timestamp()
+        except (TypeError, ValueError, OverflowError):
+            return None
+
+    @staticmethod
+    def _is_fresh(sampled_at: Optional[float], now: float, max_age_s: float) -> bool:
+        if sampled_at is None:
+            return False
+        age_s = now - sampled_at
+        return 0.0 <= age_s <= max_age_s
 
     def _k8s_get(self, path: str) -> Optional[dict]:
         if not os.path.exists(K8S_TOKEN_PATH):
@@ -193,16 +237,21 @@ class RoundRobinRouter:
         pods = self._k8s_get("/api/v1/namespaces/mlops/pods?labelSelector=app%3Dinference-service")
         metrics = self._k8s_get("/apis/metrics.k8s.io/v1beta1/namespaces/mlops/pods")
         cpu_by_ip: Dict[str, float] = {}
+        cpu_sampled_at_by_ip: Dict[str, float] = {}
         if pods and metrics:
             ip_to_name = {
                 item.get("status", {}).get("podIP"): item.get("metadata", {}).get("name")
                 for item in pods.get("items", [])
                 if item.get("status", {}).get("podIP") and item.get("metadata", {}).get("name")
             }
+            now = time.time()
             for item in metrics.get("items", []):
                 pod_name = item.get("metadata", {}).get("name")
                 pod_ip = next((ip for ip, name in ip_to_name.items() if name == pod_name), None)
                 if not pod_ip:
+                    continue
+                sampled_at = self._parse_metric_timestamp(item.get("timestamp"))
+                if not self._is_fresh(sampled_at, now, ADAPTIVE_METRIC_MAX_AGE_S):
                     continue
                 total_millicores = 0.0
                 valid = True
@@ -215,6 +264,7 @@ class RoundRobinRouter:
                 if valid:
                     # Match the existing telemetry model: inference pod CPU limit is 500m.
                     cpu_by_ip[pod_ip] = min(100.0, total_millicores / 500.0 * 100.0)
+                    cpu_sampled_at_by_ip[pod_ip] = sampled_at
 
         with self._metrics_lock:
             with self._lock:
@@ -223,6 +273,10 @@ class RoundRobinRouter:
                     f"http://{ip}:{INFERENCE_PORT}": cpu_by_ip[ip]
                     for ip in ready_ips if ip in cpu_by_ip
                 }
+                self._cpu_sampled_at = {
+                    f"http://{ip}:{INFERENCE_PORT}": cpu_sampled_at_by_ip[ip]
+                    for ip in ready_ips if ip in cpu_sampled_at_by_ip
+                }
                 return dict(self._cpu_pct)
 
     def _adaptive_scores_locked(self) -> Dict[str, float]:
@@ -230,19 +284,46 @@ class RoundRobinRouter:
         if not endpoints:
             return {}
         rows = {}
+        now_monotonic = time.monotonic()
+        now_epoch = time.time()
         for endpoint in endpoints:
             observation = self._observations.setdefault(endpoint, self._new_observation())
             latencies = list(observation["latencies"])
             errors = list(observation["errors"])
+            latency_is_fresh = self._is_fresh(
+                observation.get("latency_at"), now_monotonic, ADAPTIVE_METRIC_MAX_AGE_S
+            )
+            error_is_fresh = self._is_fresh(
+                observation.get("error_at"), now_monotonic, ADAPTIVE_METRIC_MAX_AGE_S
+            )
+            cpu_is_fresh = self._is_fresh(
+                self._cpu_sampled_at.get(endpoint), now_epoch, ADAPTIVE_METRIC_MAX_AGE_S
+            )
             rows[endpoint] = {
-                "latency": sum(latencies) / len(latencies) if latencies else None,
+                "latency": sum(latencies) / len(latencies) if latencies and latency_is_fresh else None,
                 "active": int(observation["active"]),
-                "cpu": self._cpu_pct.get(endpoint),
-                "error": sum(errors) / len(errors) if errors else None,
+                "cpu": self._cpu_pct.get(endpoint) if cpu_is_fresh else None,
+                "error": sum(errors) / len(errors) if errors and error_is_fresh else None,
             }
 
+        # Smooth raw measurements first, then normalize the smoothed values.
+        smoothed_rows: Dict[str, Dict[str, Optional[float]]] = {}
+        for endpoint, row in rows.items():
+            endpoint_ema = self._adaptive_ema.setdefault(endpoint, {})
+            smoothed_rows[endpoint] = {}
+            for key, value in row.items():
+                if value is None:
+                    smoothed_rows[endpoint][key] = None
+                    continue
+                previous = endpoint_ema.get(key)
+                smoothed = float(value) if previous is None else (
+                    ADAPTIVE_EMA_ALPHA * float(value) + (1.0 - ADAPTIVE_EMA_ALPHA) * previous
+                )
+                endpoint_ema[key] = smoothed
+                smoothed_rows[endpoint][key] = smoothed
+
         available = {
-            key: [row[key] for row in rows.values() if row[key] is not None]
+            key: [row[key] for row in smoothed_rows.values() if row[key] is not None]
             for key in ADAPTIVE_WEIGHTS
         }
         usable = {key: bool(values) for key, values in available.items()}
@@ -254,16 +335,19 @@ class RoundRobinRouter:
             if not usable[key]:
                 continue
             values = available[key]
+            minimum = min(values) if values else 0.0
             maximum = max(values) if values else 0.0
-            for endpoint, row in rows.items():
+            for endpoint, row in smoothed_rows.items():
                 value = row[key]
                 # A missing sample is treated as the worst observed value, never as a free win.
                 if value is None:
-                    normalized = 1.0 if maximum > 0 else 0.0
-                elif key == "cpu":
-                    normalized = min(1.0, max(0.0, float(value) / 100.0))
+                    normalized = 1.0
+                elif maximum == minimum:
+                    # Equal readings carry no relative information between replicas.
+                    normalized = 0.0
                 else:
-                    normalized = min(1.0, max(0.0, float(value) / maximum)) if maximum > 0 else 0.0
+                    normalized = min(1.0, max(0.0, (float(value) - minimum) / (maximum - minimum)))
+
                 scores[endpoint] += (weight / weight_total) * normalized
         return scores
 
@@ -317,6 +401,44 @@ class RoundRobinRouter:
             observation["active"] = max(0, int(observation["active"]) - 1)
             observation["latencies"].append(max(0.0, float(latency_ms)))
             observation["errors"].append(1.0 if status_code is None or status_code < 200 or status_code >= 300 else 0.0)
+            sampled_at = time.monotonic()
+            observation["latency_at"] = sampled_at
+            observation["error_at"] = sampled_at
+
+    def set_weights(self, weights: List[int]) -> List[int]:
+        if not weights or not isinstance(weights, (list, tuple)):
+            raise ValueError("Weights must be a non-empty list of integers")
+        parsed = []
+        for w in weights:
+            try:
+                val = int(w)
+                if val <= 0:
+                    raise ValueError("Each weight must be a positive integer (> 0)")
+                parsed.append(val)
+            except (ValueError, TypeError):
+                raise ValueError("Weights must contain only positive integers")
+        with self._lock:
+            self._weights = list(parsed)
+            self._wrr_current = [0] * len(self._endpoints)
+            return list(self._weights)
+
+    def set_adaptive_weights(self, weights: Dict[str, float]) -> Dict[str, float]:
+        if not isinstance(weights, dict):
+            raise ValueError("Adaptive weights must be a dictionary")
+        parsed = {}
+        for k, v in weights.items():
+            if k in ADAPTIVE_WEIGHTS:
+                try:
+                    val = float(v)
+                except (ValueError, TypeError):
+                    raise ValueError(f"Weight '{k}' must be a float")
+                if not (0.0 <= val <= 1.0):
+                    raise ValueError(f"Weight '{k}' must be between 0.0 and 1.0")
+                parsed[k] = val
+        with self._lock:
+            for k, val in parsed.items():
+                ADAPTIVE_WEIGHTS[k] = val
+            return dict(ADAPTIVE_WEIGHTS)
 
     @property
     def endpoints(self) -> List[str]:
@@ -330,7 +452,8 @@ class RoundRobinRouter:
 
     @property
     def weights(self) -> List[int]:
-        return list(self._weights)
+        with self._lock:
+            return list(self._weights)
 
     @property
     def cpu_metrics(self) -> Dict[str, float]:
@@ -340,3 +463,4 @@ class RoundRobinRouter:
     @property
     def model_run_id(self) -> Optional[str]:
         return self._model_run_id
+

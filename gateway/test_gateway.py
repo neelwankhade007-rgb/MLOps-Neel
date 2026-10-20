@@ -12,6 +12,7 @@ Comprehensive test suite for the inference gateway:
 import json
 import threading
 import time
+from datetime import datetime
 from typing import List
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -77,9 +78,62 @@ class TestRoundRobinRouter:
             r.record_result(first, 100.0, 200)
             r.record_result(second, 10.0, 200)
         r._cpu_pct = {first: 80.0, second: 10.0}
+        r._cpu_sampled_at = {first: time.time(), second: time.time()}
         scores = r.adaptive_scores()
         assert scores[second] < scores[first]
         assert r.next_endpoint("adaptive") == second
+
+    def test_adaptive_uses_min_max_normalization_and_ema(self):
+        r = RoundRobinRouter()
+        r.check_health = False
+        first, second = "http://10.0.0.1:8000", "http://10.0.0.2:8000"
+        with patch.object(r, "_resolve_endpoints", return_value=["10.0.0.1", "10.0.0.2"]):
+            r.refresh()
+
+        for _ in range(2):
+            r.record_result(first, 10.0, 200)
+            r.record_result(second, 20.0, 200)
+        initial = r.adaptive_scores()
+        assert r._adaptive_ema[first]["latency"] == 10.0
+        assert r._adaptive_ema[second]["latency"] == 20.0
+        assert initial[second] > initial[first]
+
+        # EMA operates on raw samples before normalization: 0.3*10 + 0.7*20.
+        r._observations[second]["latencies"].clear()
+        r.record_result(second, 10.0, 200)
+        r.adaptive_scores()
+        assert r._adaptive_ema[second]["latency"] == pytest.approx(17.0)
+
+    def test_adaptive_equal_metrics_have_equal_scores(self):
+        r = RoundRobinRouter()
+        r.check_health = False
+        first, second = "http://10.0.0.1:8000", "http://10.0.0.2:8000"
+        with patch.object(r, "_resolve_endpoints", return_value=["10.0.0.1", "10.0.0.2"]):
+            r.refresh()
+        for endpoint in (first, second):
+            r.record_result(endpoint, 25.0, 200)
+        r._cpu_pct = {first: 20.0, second: 20.0}
+        r._cpu_sampled_at = {first: time.time(), second: time.time()}
+        scores = r.adaptive_scores()
+        assert scores[first] == pytest.approx(scores[second])
+
+    def test_adaptive_ignores_stale_latency_and_error_samples(self):
+        r = RoundRobinRouter()
+        r.check_health = False
+        first, second = "http://10.0.0.1:8000", "http://10.0.0.2:8000"
+        with patch.object(r, "_resolve_endpoints", return_value=["10.0.0.1", "10.0.0.2"]):
+            r.refresh()
+        for endpoint, latency in ((first, 1000.0), (second, 1.0)):
+            r.record_result(endpoint, latency, 200)
+            r._observations[endpoint]["latency_at"] -= 120.0
+            r._observations[endpoint]["error_at"] -= 120.0
+
+        scores = r.adaptive_scores()
+        assert scores[first] == pytest.approx(scores[second])
+
+        r.record_result(first, 10.0, 200)
+        scores = r.adaptive_scores()
+        assert scores[first] < scores[second]
 
     def test_adaptive_fairly_rotates_when_scores_tie_and_falls_back_without_cpu(self):
         r = RoundRobinRouter()
@@ -111,10 +165,21 @@ class TestRoundRobinRouter:
         with patch.object(r, "_resolve_endpoints", return_value=["10.0.0.1"]):
             r.refresh()
         pod_list = {"items": [{"metadata": {"name": "inference-pod"}, "status": {"podIP": "10.0.0.1"}}]}
-        pod_metrics = {"items": [{"metadata": {"name": "inference-pod"}, "containers": [{"usage": {"cpu": "50m"}}]}]}
+        pod_metrics = {"items": [{"metadata": {"name": "inference-pod"}, "timestamp": datetime.utcnow().isoformat() + "Z", "containers": [{"usage": {"cpu": "50m"}}]}]}
         with patch.object(r, "_k8s_get", side_effect=[pod_list, pod_metrics]):
             cpu = r.refresh_adaptive_metrics()
         assert cpu["http://10.0.0.1:8000"] == 10.0
+
+    def test_metrics_server_rejects_stale_cpu_samples(self):
+        r = RoundRobinRouter()
+        r.check_health = False
+        with patch.object(r, "_resolve_endpoints", return_value=["10.0.0.1"]):
+            r.refresh()
+        pod_list = {"items": [{"metadata": {"name": "inference-pod"}, "status": {"podIP": "10.0.0.1"}}]}
+        pod_metrics = {"items": [{"metadata": {"name": "inference-pod"}, "timestamp": "2000-01-01T00:00:00Z", "containers": [{"usage": {"cpu": "50m"}}]}]}
+        with patch.object(r, "_k8s_get", side_effect=[pod_list, pod_metrics]):
+            cpu = r.refresh_adaptive_metrics()
+        assert cpu == {}
 
     def test_wrr_excludes_unhealthy_endpoints_and_supports_failover(self):
         r = RoundRobinRouter()
@@ -366,6 +431,7 @@ class TestGatewayServiceEndpoints:
             )
 
         with patch.object(router, "_endpoints", ["10.0.0.1", "10.0.0.2"]), \
+             patch.object(router, "_observations", {}), \
              patch.object(router, "_adaptive_index", 0), \
              patch("httpx.AsyncClient.post", side_effect=mock_post):
             response = client.post(
@@ -660,4 +726,35 @@ class TestTelemetryGatewayIntegration:
         # Replicas report genuine metrics without simulation leakage into live routing
         assert len(snapshot["replicas"]) == 2
         assert snapshot["replicas"][0]["traffic_share_pct"] == 50.0
+
+
+def test_gateway_dynamic_weights_endpoints():
+    from main import app
+    from fastapi.testclient import TestClient
+    client = TestClient(app)
+
+    # GET /weights
+    resp = client.get("/weights")
+    assert resp.status_code == 200
+    assert "weights" in resp.json()
+    assert "adaptive_weights" in resp.json()
+
+    # PUT /weights with valid weights
+    resp = client.put("/weights", json={"weights": [4, 2, 1]})
+    assert resp.status_code == 200
+    assert resp.json()["weights"] == [4, 2, 1]
+
+    # PUT /weights with invalid weights
+    resp = client.put("/weights", json={"weights": [0, -1]})
+    assert resp.status_code == 400
+
+    # PUT /adaptive-weights with valid weights
+    resp = client.put("/adaptive-weights", json={"weights": {"latency": 0.5, "active": 0.2, "cpu": 0.2, "error": 0.1}})
+    assert resp.status_code == 200
+    assert resp.json()["adaptive_weights"]["latency"] == 0.5
+
+    # PUT /adaptive-weights with negative weight
+    resp = client.put("/adaptive-weights", json={"weights": {"latency": -0.5}})
+    assert resp.status_code == 400
+
 

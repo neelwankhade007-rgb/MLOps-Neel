@@ -40,7 +40,13 @@ export interface RecentEvent {
   calculated_score?: number;
   decision_rationale?: string;
   observed_latency_ms: number;
+  duration_ms?: number;
+  start_epoch_ms?: number;
+  gateway_latency_ms?: number;
+  upstream_latency_ms?: number;
   http_status: string;
+  status_code?: number;
+  traffic_type?: string;
 }
 
 export interface TelemetrySummary {
@@ -84,13 +90,20 @@ export interface TelemetrySnapshot {
 export interface TestTrafficResult {
   request_id: string;
   replica_id: string;
-  prediction: string;
+  prediction?: string;
   latency_ms: number;
-  roundtrip_ms: number;
+  roundtrip_ms?: number;
+  duration_ms?: number;
+  start_time?: string;
+  start_epoch_ms?: number;
+  end_time?: string;
+  gateway_latency_ms?: number;
+  upstream_latency_ms?: number;
+  routing_strategy?: string;
+  traffic_type?: string;
   status: number;
   status_text: string;
   timestamp: string;
-  routing_strategy?: string;
 }
 
 export type RoutingStrategy = 'native' | 'round_robin' | 'weighted_round_robin' | 'adaptive';
@@ -99,6 +112,34 @@ export interface RoutingStrategyState {
   strategy_label: string;
   supported_strategies: RoutingStrategy[];
   wrr_weights: number[];
+  adaptive_weights?: { lat: number; req: number; cpu: number; err: number };
+  gateway_url?: string;
+  native_url?: string;
+}
+
+export interface LocustRunConfig {
+  deployment_name: string;
+  users: number;
+  target_rps: number;
+  duration_seconds: number;
+  request_limit: number;
+}
+
+export interface LocustRunSnapshot {
+  status: 'idle' | 'running' | 'completed' | 'failed';
+  run: null | (LocustRunConfig & {
+    run_id: string;
+    routing_strategy: string;
+    started_at: string;
+    metrics: {
+      sent?: number;
+      success?: number;
+      failed?: number;
+      observed_rps?: number;
+      replica_distribution?: Record<string, number>;
+      events?: TestTrafficResult[];
+    };
+  });
 }
 
 export const inferenceApi = {
@@ -107,8 +148,16 @@ export const inferenceApi = {
     return res.data;
   },
 
-  setRoutingStrategy: async (strategy: RoutingStrategy): Promise<RoutingStrategyState> => {
-    const res = await apiClient.put<RoutingStrategyState>('/inference-monitoring/routing-strategy', { strategy });
+  setRoutingStrategy: async (
+    strategy?: RoutingStrategy,
+    wrr_weights?: number[],
+    adaptive_weights?: { lat: number; req: number; cpu: number; err: number }
+  ): Promise<RoutingStrategyState> => {
+    const payload: any = {};
+    if (strategy !== undefined) payload.strategy = strategy;
+    if (wrr_weights !== undefined) payload.wrr_weights = wrr_weights;
+    if (adaptive_weights !== undefined) payload.adaptive_weights = adaptive_weights;
+    const res = await apiClient.put<RoutingStrategyState>('/inference-monitoring/routing-strategy', payload);
     return res.data;
   },
 
@@ -120,11 +169,35 @@ export const inferenceApi = {
     return res.data;
   },
 
-  sendTestTraffic: async (count: number = 5): Promise<{ success: boolean; count: number; requests: TestTrafficResult[] }> => {
+  sendTestTraffic: async (
+    count: number = 5,
+    strategy?: string,
+    traffic_type?: string
+  ): Promise<{ success: boolean; count: number; requests: TestTrafficResult[] }> => {
     const res = await apiClient.post<{ success: boolean; count: number; requests: TestTrafficResult[] }>(
       '/inference-monitoring/test-traffic',
-      { count }
+      { count, strategy, traffic_type }
     );
+    return res.data;
+  },
+
+  startLocustRun: async (config: LocustRunConfig): Promise<LocustRunSnapshot> => {
+    const res = await apiClient.post<LocustRunSnapshot>('/inference-monitoring/locust/start', config);
+    return res.data;
+  },
+
+  getLocustDeployments: async (): Promise<Array<{ name: string }>> => {
+    const res = await apiClient.get<Array<{ name: string }>>('/inference-monitoring/locust/deployments');
+    return res.data;
+  },
+
+  getLocustRunStatus: async (): Promise<LocustRunSnapshot> => {
+    const res = await apiClient.get<LocustRunSnapshot>('/inference-monitoring/locust/status');
+    return res.data;
+  },
+
+  stopLocustRun: async (): Promise<LocustRunSnapshot> => {
+    const res = await apiClient.post<LocustRunSnapshot>('/inference-monitoring/locust/stop');
     return res.data;
   },
 

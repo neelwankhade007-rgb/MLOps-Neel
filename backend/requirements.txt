@@ -13,3 +13,4 @@ mlflow==2.10.2
 scikit-learn
 xgboost
 pandas
+locust>=2.32,<3
