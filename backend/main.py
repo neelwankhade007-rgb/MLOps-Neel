@@ -6,6 +6,8 @@ from jose import JWTError, jwt
 from passlib.context import CryptContext
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 import pandas as pd
+from typing import Optional, List, Dict
+
 
 from models import (
     SessionLocal, User, Dataset, Experiment, RegisteredModel, Deployment,

@@ -240,7 +240,11 @@ export const InferenceMonitoringPage: React.FC = () => {
 
   // Callback from AutoTrafficGenerator
   const handleAutoTrafficDispatched = useCallback((results: TestTrafficResult[]) => {
-    setTestResults(results);
+    setTestResults((previous) => {
+      const byRequestId = new Map(previous.map((result) => [result.request_id, result]));
+      results.forEach((result) => byRequestId.set(result.request_id, result));
+      return Array.from(byRequestId.values()).slice(-100);
+    });
     triggerPacketAnimations(results);
     loadTelemetry(false);
   }, [triggerPacketAnimations, loadTelemetry]);
@@ -1392,6 +1396,7 @@ export const InferenceMonitoringPage: React.FC = () => {
                   <th className="py-2 px-3">Request ID</th>
                   <th className="py-2 px-3">Served by pod</th>
                   <th className="py-2 px-3">Pod IP / hostname</th>
+                  <th className="py-2 px-3">Traffic source</th>
                   <th className="py-2 px-3">Routing mechanism</th>
                   <th className="py-2 px-3">Observed latency</th>
                   <th className="py-2 px-3 text-right">HTTP status</th>
@@ -1412,6 +1417,13 @@ export const InferenceMonitoringPage: React.FC = () => {
                         {row.replica_id}
                       </td>
                       <td className="py-2 px-3 text-slate-600 font-sans text-xs">
+                        {row.traffic_type === 'locust_dashboard'
+                          ? 'Dashboard Locust'
+                          : row.traffic_type === 'test'
+                            ? 'Manual test'
+                            : row.traffic_type || 'Pod telemetry'}
+                      </td>
+                      <td className="py-2 px-3 text-slate-600 font-sans text-xs">
                         {row.routing_mechanism || 'Native K8s Service (L4 iptables)'}
                       </td>
                       <td className="py-2 px-3 text-slate-900 font-semibold">
@@ -1430,7 +1442,7 @@ export const InferenceMonitoringPage: React.FC = () => {
                   ))
                 ) : (
                   <tr>
-                    <td colSpan={7} className="py-8 text-center text-slate-400 font-sans">
+                    <td colSpan={8} className="py-8 text-center text-slate-400 font-sans">
                       {searchFilter || statusFilter !== 'ALL'
                         ? 'No events match your filter criteria.'
                         : 'No requests observed in current window. Click "Send Test Traffic" above to generate live inference activity.'}

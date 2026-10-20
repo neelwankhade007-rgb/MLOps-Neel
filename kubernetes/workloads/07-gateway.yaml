@@ -43,6 +43,16 @@ spec:
                 configMapKeyRef:
                   name: mlops-config
                   key: ADAPTIVE_METRICS_INTERVAL_S
+            - name: ADAPTIVE_EMA_ALPHA
+              valueFrom:
+                configMapKeyRef:
+                  name: mlops-config
+                  key: ADAPTIVE_EMA_ALPHA
+            - name: ADAPTIVE_METRIC_MAX_AGE_S
+              valueFrom:
+                configMapKeyRef:
+                  name: mlops-config
+                  key: ADAPTIVE_METRIC_MAX_AGE_S
           resources:
             requests:
               cpu: 50m
