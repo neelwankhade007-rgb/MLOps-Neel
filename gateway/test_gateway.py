@@ -366,6 +366,7 @@ class TestGatewayServiceEndpoints:
             )
 
         with patch.object(router, "_endpoints", ["10.0.0.1", "10.0.0.2"]), \
+             patch.object(router, "_observations", {}), \
              patch.object(router, "_adaptive_index", 0), \
              patch("httpx.AsyncClient.post", side_effect=mock_post):
             response = client.post(
@@ -660,4 +661,35 @@ class TestTelemetryGatewayIntegration:
         # Replicas report genuine metrics without simulation leakage into live routing
         assert len(snapshot["replicas"]) == 2
         assert snapshot["replicas"][0]["traffic_share_pct"] == 50.0
+
+
+def test_gateway_dynamic_weights_endpoints():
+    from main import app
+    from fastapi.testclient import TestClient
+    client = TestClient(app)
+
+    # GET /weights
+    resp = client.get("/weights")
+    assert resp.status_code == 200
+    assert "weights" in resp.json()
+    assert "adaptive_weights" in resp.json()
+
+    # PUT /weights with valid weights
+    resp = client.put("/weights", json={"weights": [4, 2, 1]})
+    assert resp.status_code == 200
+    assert resp.json()["weights"] == [4, 2, 1]
+
+    # PUT /weights with invalid weights
+    resp = client.put("/weights", json={"weights": [0, -1]})
+    assert resp.status_code == 400
+
+    # PUT /adaptive-weights with valid weights
+    resp = client.put("/adaptive-weights", json={"weights": {"latency": 0.5, "active": 0.2, "cpu": 0.2, "error": 0.1}})
+    assert resp.status_code == 200
+    assert resp.json()["adaptive_weights"]["latency"] == 0.5
+
+    # PUT /adaptive-weights with negative weight
+    resp = client.put("/adaptive-weights", json={"weights": {"latency": -0.5}})
+    assert resp.status_code == 400
+
 

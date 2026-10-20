@@ -318,6 +318,41 @@ class RoundRobinRouter:
             observation["latencies"].append(max(0.0, float(latency_ms)))
             observation["errors"].append(1.0 if status_code is None or status_code < 200 or status_code >= 300 else 0.0)
 
+    def set_weights(self, weights: List[int]) -> List[int]:
+        if not weights or not isinstance(weights, (list, tuple)):
+            raise ValueError("Weights must be a non-empty list of integers")
+        parsed = []
+        for w in weights:
+            try:
+                val = int(w)
+                if val <= 0:
+                    raise ValueError("Each weight must be a positive integer (> 0)")
+                parsed.append(val)
+            except (ValueError, TypeError):
+                raise ValueError("Weights must contain only positive integers")
+        with self._lock:
+            self._weights = list(parsed)
+            self._wrr_current = [0] * len(self._endpoints)
+            return list(self._weights)
+
+    def set_adaptive_weights(self, weights: Dict[str, float]) -> Dict[str, float]:
+        if not isinstance(weights, dict):
+            raise ValueError("Adaptive weights must be a dictionary")
+        parsed = {}
+        for k, v in weights.items():
+            if k in ADAPTIVE_WEIGHTS:
+                try:
+                    val = float(v)
+                except (ValueError, TypeError):
+                    raise ValueError(f"Weight '{k}' must be a float")
+                if not (0.0 <= val <= 1.0):
+                    raise ValueError(f"Weight '{k}' must be between 0.0 and 1.0")
+                parsed[k] = val
+        with self._lock:
+            for k, val in parsed.items():
+                ADAPTIVE_WEIGHTS[k] = val
+            return dict(ADAPTIVE_WEIGHTS)
+
     @property
     def endpoints(self) -> List[str]:
         with self._lock:
@@ -330,7 +365,8 @@ class RoundRobinRouter:
 
     @property
     def weights(self) -> List[int]:
-        return list(self._weights)
+        with self._lock:
+            return list(self._weights)
 
     @property
     def cpu_metrics(self) -> Dict[str, float]:
@@ -340,3 +376,4 @@ class RoundRobinRouter:
     @property
     def model_run_id(self) -> Optional[str]:
         return self._model_run_id
+

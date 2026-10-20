@@ -19,21 +19,33 @@ K8S_API_URL = "https://kubernetes.default.svc"
 HEADLESS_DNS = "inference-service-headless.mlops.svc.cluster.local"
 CLUSTERIP_HOST = "inference-service"
 
-# Known replica assignments for UI display
-REPLICA_META = {
-    0: {"name": "inference-1", "color": "#2563EB", "badge_class": "bg-primary-container text-on-primary"},
-    1: {"name": "inference-2", "color": "#0D9488", "badge_class": "bg-tertiary text-on-tertiary"},
-    2: {"name": "inference-3", "color": "#7C3AED", "badge_class": "bg-secondary text-on-secondary"}
-}
+# Dynamic replica palette for UI display (supports any number of replicas)
+PALETTE = [
+    {"color": "#2563EB", "badge_class": "bg-primary-container text-on-primary"},
+    {"color": "#0D9488", "badge_class": "bg-tertiary text-on-tertiary"},
+    {"color": "#7C3AED", "badge_class": "bg-secondary text-on-secondary"},
+    {"color": "#EA580C", "badge_class": "bg-amber-100 text-amber-800"},
+    {"color": "#059669", "badge_class": "bg-emerald-100 text-emerald-800"},
+    {"color": "#DB2777", "badge_class": "bg-pink-100 text-pink-800"},
+]
+
+def get_replica_meta(idx: int) -> Dict[str, str]:
+    item = PALETTE[idx % len(PALETTE)]
+    return {
+        "name": f"inference-{idx + 1}",
+        "color": item["color"],
+        "badge_class": item["badge_class"]
+    }
 
 class TelemetryAggregator:
     def __init__(self):
         self.history_latency = deque(maxlen=30)
         self.history_distribution = deque(maxlen=30)
         self.history_throughput = deque(maxlen=30)
-        self.recent_events = deque(maxlen=40)
+        self.recent_events = deque(maxlen=60)
         self.last_sample_time: Optional[float] = None
         self.last_request_count: Optional[int] = None
+
 
     def _get_k8s_client_headers(self) -> Optional[Dict[str, str]]:
         if os.path.exists(K8S_TOKEN_PATH):
@@ -328,7 +340,7 @@ class TelemetryAggregator:
             for r in stat.get("recent_requests", []):
                 all_recent_requests.append(r)
 
-            meta = REPLICA_META.get(idx, {"name": f"inference-{idx+1}", "color": "#2563EB", "badge_class": "bg-primary-container text-on-primary"})
+            meta = get_replica_meta(idx)
 
             processed_replicas.append({
                 "index": idx + 1,
@@ -336,6 +348,7 @@ class TelemetryAggregator:
                 "replica_id": rep_id,
                 "color": meta["color"],
                 "badge_class": meta["badge_class"],
+
                 "node_name": "minikube",
                 "pod_ip": replica_ips[idx] if idx < len(replica_ips) else "10.244.0.x",
                 "status": status_str,
@@ -432,22 +445,45 @@ class TelemetryAggregator:
         overall_p99 = round(max(valid_p99), 1) if (valid_p99 and total_requests >= 10) else None
         overall_err_rate = round((total_errors / total_requests * 100.0), 2) if total_requests > 0 else 0.0
 
-        # Sort recent requests by authentic timestamp
-        all_recent_requests.sort(key=lambda x: str(x.get("timestamp", "")), reverse=True)
-        recent_log = []
+        # Sort recent requests by authentic timestamp and merge with recorded events
         routing_label = "Custom Gateway (Round Robin)" if is_gw else "Native K8s Service (L4 iptables)"
-        for ev in all_recent_requests[:25]:
-            matched_rep = next((r for r in processed_replicas if r["replica_id"] == ev.get("replica_id")), None)
-            rep_name = matched_rep["name"] if matched_rep else ev.get("replica_id", "inference-node")
-            recent_log.append({
-                "timestamp": ev.get("timestamp", datetime.utcnow().strftime("%H:%M:%S.%f")[:-3]),
-                "request_id": ev.get("id", f"#req-{uuid.uuid4().hex[:6]}"),
-                "assigned_pod": rep_name,
-                "replica_id": ev.get("replica_id"),
-                "routing_mechanism": ev.get("routing_strategy", routing_label),
-                "observed_latency_ms": ev.get("latency_ms", 0.0),
-                "http_status": ev.get("status_text", "200 OK")
-            })
+        seen_req_ids = set()
+        merged_events = []
+
+        # First add recorded events from test / automatic traffic
+        for ev in list(self.recent_events):
+            req_id = ev.get("request_id")
+            if req_id and req_id not in seen_req_ids:
+                seen_req_ids.add(req_id)
+                matched_rep = next((r for r in processed_replicas if r["replica_id"] == ev.get("replica_id")), None)
+                if matched_rep:
+                    ev["assigned_pod"] = matched_rep["name"]
+                merged_events.append(ev)
+
+        # Next add events reported directly by replicas
+        for ev in all_recent_requests:
+            req_id = ev.get("id") or ev.get("request_id")
+            if req_id and req_id not in seen_req_ids:
+                seen_req_ids.add(req_id)
+                matched_rep = next((r for r in processed_replicas if r["replica_id"] == ev.get("replica_id")), None)
+                rep_name = matched_rep["name"] if matched_rep else ev.get("replica_id", "inference-node")
+                lat = ev.get("latency_ms", 0.0)
+                merged_events.append({
+                    "timestamp": ev.get("timestamp", datetime.utcnow().strftime("%H:%M:%S.%f")[:-3]),
+                    "request_id": req_id,
+                    "assigned_pod": rep_name,
+                    "replica_id": ev.get("replica_id"),
+                    "routing_mechanism": ev.get("routing_strategy", routing_label),
+                    "observed_latency_ms": lat,
+                    "duration_ms": lat,
+                    "start_epoch_ms": ev.get("start_epoch_ms", int(time.time() * 1000)),
+                    "http_status": ev.get("status_text", "200 OK"),
+                    "status_code": 200,
+                    "traffic_type": "in_cluster"
+                })
+
+        merged_events.sort(key=lambda x: str(x.get("timestamp", "")), reverse=True)
+        recent_log = merged_events[:50]
 
         # Record point in time-series history
         current_time_str = datetime.utcnow().strftime("%H:%M:%S")
@@ -504,11 +540,23 @@ class TelemetryAggregator:
             }
         }
 
-    def send_test_traffic(self, count: int = 1) -> List[Dict[str, Any]]:
-        """Send test predictions through the active routing strategy."""
-        count = max(1, min(20, count))
+    def send_test_traffic(
+        self,
+        count: int = 1,
+        strategy_override: Optional[str] = None,
+        traffic_type: str = "test"
+    ) -> List[Dict[str, Any]]:
+        """Send test predictions through the active or overridden routing strategy."""
+        count = max(1, min(25, count))
         results = []
-        target_url, strategy = routing_config.get_target_url()
+        target_url, default_strategy = routing_config.get_target_url()
+        strategy = strategy_override or default_strategy
+        if strategy_override and strategy_override != default_strategy:
+            if strategy_override == STRATEGY_NATIVE:
+                target_url = f"{routing_config.native_url}/predict"
+            else:
+                target_url = f"{routing_config.gateway_url}/predict"
+
         primary_url = target_url
         fallback_url = f"http://{CLUSTERIP_HOST}:8000/predict"
 
@@ -531,13 +579,19 @@ class TelemetryAggregator:
 
         for _ in range(count):
             t0 = time.perf_counter()
+            start_epoch_ms = int(time.time() * 1000)
+            t_start_iso = datetime.utcnow().strftime("%H:%M:%S.%f")[:-3]
             used_url = primary_url
             try:
+                headers = {"Content-Type": "application/json"}
+                if strategy != STRATEGY_NATIVE:
+                    headers["X-Routing-Strategy"] = strategy
+                headers["X-Traffic-Type"] = traffic_type
+
                 req = urllib.request.Request(
                     primary_url,
                     data=data_bytes,
-                    headers={"Content-Type": "application/json"}
-                    | ({"X-Routing-Strategy": strategy} if strategy != STRATEGY_NATIVE else {})
+                    headers=headers
                 )
                 try:
                     resp_ctx = urllib.request.urlopen(req, timeout=3.0)
@@ -552,41 +606,114 @@ class TelemetryAggregator:
                     resp_ctx = urllib.request.urlopen(req_fb, timeout=3.0)
 
                 with resp_ctx as resp:
-                    elapsed = (time.perf_counter() - t0) * 1000.0
+                    elapsed = round((time.perf_counter() - t0) * 1000.0, 2)
+                    t_end_iso = datetime.utcnow().strftime("%H:%M:%S.%f")[:-3]
                     body = json.loads(resp.read().decode())
-                    results.append({
+                    gw_meta = body.get("gateway_meta", {})
+                    rep_id = body.get("replica_id") or gw_meta.get("selected_replica", "unknown")
+                    gw_lat = gw_meta.get("gateway_latency_ms")
+                    upstream_lat = gw_meta.get("upstream_latency_ms", body.get("latency_ms", elapsed))
+                    used_strategy = gw_meta.get("routing_strategy", strategy)
+
+                    record = {
                         "request_id": body.get("request_id", f"req-{uuid.uuid4().hex[:6]}"),
-                        "replica_id": body.get("replica_id", body.get("gateway_meta", {}).get("selected_replica", "unknown")),
+                        "replica_id": rep_id,
                         "prediction": body.get("prediction", "1"),
-                        "latency_ms": body.get("latency_ms", round(elapsed, 2)),
-                        "roundtrip_ms": round(elapsed, 2),
-                        "routing_strategy": body.get("gateway_meta", {}).get("routing_strategy", strategy),
+                        "latency_ms": body.get("latency_ms", elapsed),
+                        "roundtrip_ms": elapsed,
+                        "duration_ms": elapsed,
+                        "start_time": t_start_iso,
+                        "start_epoch_ms": start_epoch_ms,
+                        "end_time": t_end_iso,
+                        "gateway_latency_ms": gw_lat,
+                        "upstream_latency_ms": upstream_lat,
+                        "routing_strategy": used_strategy,
+                        "traffic_type": traffic_type,
                         "status": 200,
                         "status_text": "200 OK",
-                        "timestamp": datetime.utcnow().strftime("%H:%M:%S.%f")[:-3]
+                        "timestamp": t_start_iso
+                    }
+                    results.append(record)
+                    self.recent_events.appendleft({
+                        "timestamp": t_start_iso,
+                        "request_id": record["request_id"],
+                        "assigned_pod": rep_id.split("-")[-1] if "-" in rep_id else rep_id,
+                        "replica_id": rep_id,
+                        "routing_mechanism": used_strategy,
+                        "observed_latency_ms": record["latency_ms"],
+                        "duration_ms": elapsed,
+                        "start_epoch_ms": start_epoch_ms,
+                        "gateway_latency_ms": gw_lat,
+                        "upstream_latency_ms": upstream_lat,
+                        "http_status": "200 OK",
+                        "status_code": 200,
+                        "traffic_type": traffic_type
                     })
             except urllib.error.HTTPError as he:
-                elapsed = (time.perf_counter() - t0) * 1000.0
-                results.append({
+                elapsed = round((time.perf_counter() - t0) * 1000.0, 2)
+                t_end_iso = datetime.utcnow().strftime("%H:%M:%S.%f")[:-3]
+                record = {
                     "request_id": f"req-{uuid.uuid4().hex[:6]}",
                     "replica_id": "error",
-                    "latency_ms": round(elapsed, 2),
+                    "latency_ms": elapsed,
+                    "duration_ms": elapsed,
+                    "start_time": t_start_iso,
+                    "start_epoch_ms": start_epoch_ms,
+                    "end_time": t_end_iso,
+                    "routing_strategy": strategy,
+                    "traffic_type": traffic_type,
                     "status": he.code,
                     "status_text": f"{he.code} Error",
-                    "timestamp": datetime.utcnow().strftime("%H:%M:%S.%f")[:-3]
+                    "timestamp": t_start_iso
+                }
+                results.append(record)
+                self.recent_events.appendleft({
+                    "timestamp": t_start_iso,
+                    "request_id": record["request_id"],
+                    "assigned_pod": "error",
+                    "replica_id": "error",
+                    "routing_mechanism": strategy,
+                    "observed_latency_ms": elapsed,
+                    "duration_ms": elapsed,
+                    "start_epoch_ms": start_epoch_ms,
+                    "http_status": f"{he.code} Error",
+                    "status_code": he.code,
+                    "traffic_type": traffic_type
                 })
             except Exception as e:
-                elapsed = (time.perf_counter() - t0) * 1000.0
-                results.append({
+                elapsed = round((time.perf_counter() - t0) * 1000.0, 2)
+                t_end_iso = datetime.utcnow().strftime("%H:%M:%S.%f")[:-3]
+                record = {
                     "request_id": f"req-{uuid.uuid4().hex[:6]}",
-                    "replica_id": "error",
-                    "latency_ms": round(elapsed, 2),
+                    "replica_id": "unavailable",
+                    "latency_ms": elapsed,
+                    "duration_ms": elapsed,
+                    "start_time": t_start_iso,
+                    "start_epoch_ms": start_epoch_ms,
+                    "end_time": t_end_iso,
+                    "routing_strategy": strategy,
+                    "traffic_type": traffic_type,
                     "status": 500,
                     "status_text": f"Error: {str(e)[:30]}",
-                    "timestamp": datetime.utcnow().strftime("%H:%M:%S.%f")[:-3]
+                    "timestamp": t_start_iso
+                }
+                results.append(record)
+                self.recent_events.appendleft({
+                    "timestamp": t_start_iso,
+                    "request_id": record["request_id"],
+                    "assigned_pod": "unavailable",
+                    "replica_id": "unavailable",
+                    "routing_mechanism": strategy,
+                    "observed_latency_ms": elapsed,
+                    "duration_ms": elapsed,
+                    "start_epoch_ms": start_epoch_ms,
+                    "http_status": "500 Error",
+                    "status_code": 500,
+                    "traffic_type": traffic_type
                 })
 
         return results
 
 # Singleton instance
 telemetry_aggregator = TelemetryAggregator()
+

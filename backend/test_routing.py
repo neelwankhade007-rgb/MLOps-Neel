@@ -82,3 +82,43 @@ def test_strategy_api_requires_authentication_and_allows_authenticated_switching
     finally:
         app.dependency_overrides.pop(get_current_user, None)
         routing_config.set_strategy(STRATEGY_ROUND_ROBIN)
+
+
+def test_wrr_weights_dynamic_configuration():
+    config = RoutingConfig()
+    updated = config.set_wrr_weights([4, 2, 1])
+    assert updated == [4, 2, 1]
+    assert config.wrr_weights == [4, 2, 1]
+    assert config.to_dict()["wrr_weights"] == [4, 2, 1]
+
+    # Reject non-positive or empty
+    try:
+        config.set_wrr_weights([])
+    except ValueError as exc:
+        assert "non-empty" in str(exc)
+    else:
+        raise AssertionError("Empty weights should fail")
+
+    try:
+        config.set_wrr_weights([3, 0, 1])
+    except ValueError as exc:
+        assert "positive integers" in str(exc)
+    else:
+        raise AssertionError("Zero weight should fail")
+
+
+def test_adaptive_weights_dynamic_configuration():
+    config = RoutingConfig()
+    updated = config.set_adaptive_weights({"lat": 0.5, "req": 0.2, "cpu": 0.2, "err": 0.1})
+    assert updated["lat"] == 0.5
+    assert updated["err"] == 0.1
+    assert config.adaptive_weights["lat"] == 0.5
+
+    # Reject invalid weights
+    try:
+        config.set_adaptive_weights({"lat": -0.1, "req": 0.5, "cpu": 0.3, "err": 0.3})
+    except ValueError as exc:
+        assert "between 0.0 and 1.0" in str(exc)
+    else:
+        raise AssertionError("Negative weight should fail")
+

@@ -159,22 +159,30 @@ def on_test_stop(environment, **kwargs):
     print("=" * 60 + "\n")
 
 class TitanicInferenceUser(HttpUser):
-    # Default target host if not overridden via CLI --host or env TARGET_HOST
+    # Target the authenticated backend route so requests use its active routing strategy.
     host = os.environ.get("TARGET_HOST", "http://localhost:8000")
-    
+    deployment_name = os.environ.get("DEPLOYMENT_NAME", "").strip()
+    api_token = os.environ.get("LOCUST_API_TOKEN", "").strip()
+
     # Controlled pacing between requests (100ms - 400ms) to prevent flooding
     wait_time = between(0.1, 0.4)
+
+    def on_start(self):
+        if not self.deployment_name:
+            raise RuntimeError("Set DEPLOYMENT_NAME to an existing deployment owned by the authenticated user")
+        if not self.api_token:
+            raise RuntimeError("Set LOCUST_API_TOKEN to a valid bearer token from /api/v1/auth/login")
 
     @task
     def predict(self):
         passenger = random.choice(VALID_PASSENGERS)
         payload = {"features": passenger}
-        
+
         with self.client.post(
-            "/predict",
+            f"/api/v1/predict/{self.deployment_name}",
             json=payload,
-            headers={"Content-Type": "application/json"},
-            name="/predict",
+            headers={"Authorization": f"Bearer {self.api_token}", "Content-Type": "application/json"},
+            name="/api/v1/predict/[deployment]",
             catch_response=True
         ) as response:
             if response.status_code == 200:

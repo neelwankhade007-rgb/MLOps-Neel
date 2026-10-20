@@ -506,9 +506,13 @@ from inference_telemetry import telemetry_aggregator
 
 class TestTrafficRequest(BaseModel):
     count: int = 5
+    strategy: Optional[str] = None
+    traffic_type: Optional[str] = "test"
 
 class RoutingStrategyRequest(BaseModel):
-    strategy: str
+    strategy: Optional[str] = None
+    wrr_weights: Optional[List[int]] = None
+    adaptive_weights: Optional[Dict[str, float]] = None
 
 @app.get("/api/v1/inference-monitoring/routing-strategy")
 def get_routing_strategy(current_user: User = Depends(get_current_user)):
@@ -517,7 +521,12 @@ def get_routing_strategy(current_user: User = Depends(get_current_user)):
 @app.put("/api/v1/inference-monitoring/routing-strategy")
 def set_routing_strategy(req: RoutingStrategyRequest, current_user: User = Depends(get_current_user)):
     try:
-        routing_config.set_strategy(req.strategy)
+        if req.strategy is not None:
+            routing_config.set_strategy(req.strategy)
+        if req.wrr_weights is not None:
+            routing_config.set_wrr_weights(req.wrr_weights)
+        if req.adaptive_weights is not None:
+            routing_config.set_adaptive_weights(req.adaptive_weights)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     return routing_config.to_dict()
@@ -543,15 +552,20 @@ def trigger_test_traffic(
     current_user: User = Depends(get_current_user)
 ):
     """
-    Sends actual test prediction requests through native Kubernetes Service ClusterIP,
+    Sends actual test prediction requests through selected routing strategy,
     allowing live verification of request routing across replicas.
     """
-    results = telemetry_aggregator.send_test_traffic(count=req.count)
+    results = telemetry_aggregator.send_test_traffic(
+        count=req.count,
+        strategy_override=req.strategy,
+        traffic_type=req.traffic_type or "test"
+    )
     return {
         "success": True,
         "count": len(results),
         "requests": results
     }
+
 
 @app.get("/api/v1/inference-monitoring/prometheus/status")
 def get_prometheus_status(current_user: User = Depends(get_current_user)):
@@ -565,4 +579,205 @@ def get_prometheus_status(current_user: User = Depends(get_current_user)):
             return {"status": "connected", "targets": data.get("data", {}).get("activeTargets", [])}
     except Exception as e:
         return {"status": "unavailable", "error": str(e), "targets": []}
+
+
+# Dashboard-controlled Locust runs. Locust runs in the backend container and
+# calls the authenticated prediction route on localhost, preserving the active
+# backend/gateway routing path.
+from pydantic import Field as _PydanticField
+import threading as _threading
+
+
+class LocustRunRequest(BaseModel):
+    deployment_name: str
+    users: int = _PydanticField(default=5, ge=1, le=50)
+    target_rps: float = _PydanticField(default=1.0, gt=0, le=50)
+    duration_seconds: int = _PydanticField(default=10, ge=1, le=300)
+    request_limit: int = _PydanticField(default=50, ge=1, le=10000)
+
+
+_locust_state_lock = _threading.Lock()
+_locust_process = None
+_locust_log_handle = None
+_locust_run_state = None
+
+
+def _locust_run_snapshot():
+    global _locust_log_handle
+    if _locust_run_state is None:
+        return {"status": "idle", "run": None}
+
+    process = _locust_process
+    status = "running" if process is not None and process.poll() is None else "completed"
+    if process is not None and process.poll() not in (None, 0) and _locust_run_state.get("stop_reason") not in ("request_limit", "manual_stop"):
+        status = "failed"
+    metrics = {}
+    metrics_path = _locust_run_state.get("metrics_path")
+    if metrics_path:
+        try:
+            with open(metrics_path, "r", encoding="utf-8") as metrics_file:
+                metrics = json.load(metrics_file)
+        except (OSError, ValueError):
+            pass
+    if status != "running" and _locust_log_handle is not None:
+        _locust_log_handle.close()
+        _locust_log_handle = None
+    return {"status": status, "run": {**_locust_run_state["public"], "metrics": metrics}}
+
+
+def _watch_locust_request_limit(process, metrics_path, request_limit, run_id):
+    import json as _json
+    import time as _time
+
+    while process.poll() is None:
+        try:
+            with open(metrics_path, "r", encoding="utf-8") as metrics_file:
+                metrics = _json.load(metrics_file)
+            if metrics.get("sent", 0) >= request_limit:
+                if _locust_run_state and _locust_run_state["public"]["run_id"] == run_id:
+                    _locust_run_state["stop_reason"] = "request_limit"
+                # Let Locust finish its own runner.quit() after the final response
+                # before sending SIGTERM to its headless CLI process.
+                _time.sleep(0.5)
+                if process.poll() is None:
+                    process.terminate()
+                return
+        except (OSError, ValueError):
+            pass
+        _time.sleep(0.1)
+
+
+@app.post("/api/v1/inference-monitoring/locust/start")
+def start_dashboard_locust_run(
+    req: LocustRunRequest,
+    token: str = Depends(oauth2_scheme),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    global _locust_process, _locust_log_handle, _locust_run_state
+    import os as _os
+    import subprocess as _subprocess
+    import sys as _sys
+    import tempfile as _tempfile
+
+    dep = db.query(Deployment).filter(Deployment.name == req.deployment_name).first()
+    if not dep:
+        raise HTTPException(status_code=404, detail="Deployment not found")
+    if dep.user_id is not None and dep.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized to access this deployment")
+    model_record = db.query(RegisteredModel).filter(RegisteredModel.id == dep.model_id).first()
+    exp = db.query(Experiment).filter(Experiment.id == model_record.experiment_id).first() if model_record else None
+    if not exp or exp.run_id != INFERENCE_RUN_ID:
+        raise HTTPException(status_code=400, detail="Deployment model run does not match the inference replicas")
+
+    with _locust_state_lock:
+        if _locust_process is not None and _locust_process.poll() is None:
+            raise HTTPException(status_code=409, detail="A Locust run is already active")
+
+        run_id = str(uuid.uuid4())
+        metrics_path = _os.path.join(_tempfile.gettempdir(), f"locust-{run_id}.json")
+        log_path = _os.path.join(_tempfile.gettempdir(), f"locust-{run_id}.log")
+        public = {
+            "run_id": run_id,
+            "deployment_name": req.deployment_name,
+            "users": req.users,
+            "target_rps": req.target_rps,
+            "duration_seconds": req.duration_seconds,
+            "request_limit": req.request_limit,
+            "routing_strategy": routing_config.get_strategy(),
+            "started_at": datetime.utcnow().isoformat() + "Z",
+        }
+        env = _os.environ.copy()
+        env.update({
+            "TARGET_HOST": "http://127.0.0.1:8000",
+            "DEPLOYMENT_NAME": req.deployment_name,
+            "LOCUST_API_TOKEN": token,
+            "LOCUST_TARGET_RPS": str(req.target_rps),
+            "LOCUST_REQUEST_LIMIT": str(req.request_limit),
+            "LOCUST_METRICS_PATH": metrics_path,
+            "LOCUST_ROUTING_STRATEGY": routing_config.get_strategy(),
+        })
+        try:
+            _locust_log_handle = open(log_path, "w", encoding="utf-8")
+            _locust_process = _subprocess.Popen(
+                [
+                    _sys.executable, "-m", "locust",
+                    "-f", _os.path.join(_os.path.dirname(__file__), "locustfile.py"),
+                    "--headless",
+                    "--host", "http://127.0.0.1:8000",
+                    "--users", str(req.users),
+                    "--spawn-rate", str(req.users),
+                    "--run-time", f"{req.duration_seconds}s",
+                    "--stop-timeout", "5",
+                ],
+                cwd=_os.path.dirname(__file__),
+                env=env,
+                stdout=_locust_log_handle,
+                stderr=_subprocess.STDOUT,
+            )
+        except OSError as exc:
+            if _locust_log_handle is not None:
+                _locust_log_handle.close()
+                _locust_log_handle = None
+            _locust_process = None
+            raise HTTPException(status_code=503, detail=f"Could not start Locust: {exc}")
+        _locust_run_state = {
+            "public": public,
+            "owner_id": current_user.id,
+            "metrics_path": metrics_path,
+            "log_path": log_path,
+        }
+        _threading.Thread(
+            target=_watch_locust_request_limit,
+            args=(_locust_process, metrics_path, req.request_limit, run_id),
+            daemon=True,
+        ).start()
+
+    return _locust_run_snapshot()
+
+
+@app.get("/api/v1/inference-monitoring/locust/deployments")
+def get_locust_deployments(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    deployments = db.query(Deployment).filter(
+        Deployment.status == "active",
+        ((Deployment.user_id == current_user.id) | (Deployment.user_id.is_(None))),
+    ).all()
+    available = []
+    for dep in deployments:
+        model_record = db.query(RegisteredModel).filter(RegisteredModel.id == dep.model_id).first()
+        exp = db.query(Experiment).filter(Experiment.id == model_record.experiment_id).first() if model_record else None
+        if exp and exp.run_id == INFERENCE_RUN_ID:
+            available.append({"name": dep.name})
+    return available
+
+
+@app.get("/api/v1/inference-monitoring/locust/status")
+def get_dashboard_locust_status(current_user: User = Depends(get_current_user)):
+    if _locust_run_state is not None and _locust_run_state.get("owner_id") != current_user.id:
+        return {"status": "idle", "run": None}
+    return _locust_run_snapshot()
+
+
+@app.post("/api/v1/inference-monitoring/locust/stop")
+def stop_dashboard_locust_run(current_user: User = Depends(get_current_user)):
+    global _locust_process
+    import subprocess as _subprocess
+
+    with _locust_state_lock:
+        if _locust_run_state is not None and _locust_run_state.get("owner_id") != current_user.id:
+            raise HTTPException(status_code=403, detail="Not authorized to stop this Locust run")
+        if _locust_process is None or _locust_process.poll() is not None:
+            return _locust_run_snapshot()
+        if _locust_run_state is not None:
+            _locust_run_state["stop_reason"] = "manual_stop"
+        _locust_process.terminate()
+        try:
+            _locust_process.wait(timeout=5)
+        except _subprocess.TimeoutExpired:
+            _locust_process.kill()
+            _locust_process.wait(timeout=2)
+    return _locust_run_snapshot()
 

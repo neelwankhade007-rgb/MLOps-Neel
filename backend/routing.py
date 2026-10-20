@@ -1,6 +1,8 @@
+import json
 import os
 import threading
-from typing import Dict, Any, Tuple
+import urllib.request
+from typing import Dict, Any, Tuple, List, Optional
 
 STRATEGY_NATIVE = "native"
 STRATEGY_ROUND_ROBIN = "round_robin"
@@ -43,6 +45,12 @@ class RoutingConfig:
             raise ValueError("WRR_WEIGHTS must be comma-separated positive integers")
         if not self.wrr_weights or any(weight <= 0 for weight in self.wrr_weights):
             raise ValueError("WRR_WEIGHTS must contain only positive integers")
+        self.adaptive_weights: Dict[str, float] = {
+            "lat": 0.40,
+            "req": 0.30,
+            "cpu": 0.20,
+            "err": 0.10,
+        }
 
     def get_strategy(self) -> str:
         """Returns the canonical identifier for the active routing strategy."""
@@ -81,6 +89,88 @@ class RoutingConfig:
             self._active_strategy = canonical
             return self._active_strategy
 
+    def set_wrr_weights(self, weights: List[int]) -> List[int]:
+        """
+        Validates and updates Weighted Round Robin replica weights.
+        Ensures non-empty list of positive integers.
+        Synchronizes with gateway if available.
+        """
+        if not weights or not isinstance(weights, (list, tuple)):
+            raise ValueError("wrr_weights must be a non-empty list of integers")
+        parsed = []
+        for w in weights:
+            try:
+                val = int(w)
+                if val <= 0:
+                    raise ValueError("Each weight must be a positive integer (> 0)")
+                parsed.append(val)
+            except (ValueError, TypeError):
+                raise ValueError("wrr_weights must contain only positive integers")
+
+        with self._lock:
+            self.wrr_weights = list(parsed)
+
+        # Notify gateway if running
+        try:
+            req_data = json.dumps({"weights": parsed}).encode("utf-8")
+            req = urllib.request.Request(
+                f"{self.gateway_url}/weights",
+                data=req_data,
+                headers={"Content-Type": "application/json"},
+                method="PUT"
+            )
+            with urllib.request.urlopen(req, timeout=1.5):
+                pass
+        except Exception:
+            pass
+
+        return list(self.wrr_weights)
+
+    def set_adaptive_weights(self, weights: Dict[str, float]) -> Dict[str, float]:
+        """
+        Validates and updates dynamic objective weights for adaptive routing.
+        """
+        if not isinstance(weights, dict):
+            raise ValueError("adaptive_weights must be a dictionary")
+        parsed = {}
+        for k in ("lat", "req", "cpu", "err"):
+            if k in weights:
+                try:
+                    val = float(weights[k])
+                except (ValueError, TypeError):
+                    raise ValueError(f"Weight '{k}' must be a float")
+                if not (0.0 <= val <= 1.0):
+                    raise ValueError(f"Weight '{k}' must be between 0.0 and 1.0")
+                parsed[k] = val
+            else:
+                with self._lock:
+                    parsed[k] = self.adaptive_weights.get(k, 0.25)
+
+        with self._lock:
+            self.adaptive_weights = parsed
+
+        # Notify gateway if running
+        try:
+            gw_map = {
+                "latency": parsed.get("lat", 0.40),
+                "active": parsed.get("req", 0.30),
+                "cpu": parsed.get("cpu", 0.20),
+                "error": parsed.get("err", 0.10)
+            }
+            req_data = json.dumps({"weights": gw_map}).encode("utf-8")
+            req = urllib.request.Request(
+                f"{self.gateway_url}/adaptive-weights",
+                data=req_data,
+                headers={"Content-Type": "application/json"},
+                method="PUT"
+            )
+            with urllib.request.urlopen(req, timeout=1.5):
+                pass
+        except Exception:
+            pass
+
+        return dict(self.adaptive_weights)
+
     def get_target_url(self) -> Tuple[str, str]:
         """
         Returns (target_predict_url, canonical_strategy) based on active strategy.
@@ -96,15 +186,19 @@ class RoutingConfig:
     def to_dict(self) -> Dict[str, Any]:
         with self._lock:
             strat = self._active_strategy
+            wrr = list(self.wrr_weights)
+            adaptive = dict(self.adaptive_weights)
 
         return {
             "strategy": strat,
             "strategy_label": STRATEGY_LABELS.get(strat, "Native Kubernetes Service"),
             "gateway_url": self.gateway_url,
             "native_url": self.native_url,
-            "wrr_weights": list(self.wrr_weights),
+            "wrr_weights": wrr,
+            "adaptive_weights": adaptive,
             "supported_strategies": [STRATEGY_NATIVE, STRATEGY_ROUND_ROBIN, STRATEGY_WEIGHTED_ROUND_ROBIN, STRATEGY_ADAPTIVE],
         }
+
 
 
 # Global singleton instance

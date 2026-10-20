@@ -1,26 +1,28 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import toast from 'react-hot-toast';
 import {
-  Activity,
   Play,
   RotateCw,
   Download,
-  CheckCircle2,
   AlertTriangle,
   Server,
   Cpu,
   Clock,
-  Layers,
   Search,
   ShieldCheck,
-  Pause,
   Sliders,
   Terminal,
   Zap,
 } from 'lucide-react';
 import { inferenceApi } from '../api/inferenceApi';
-import type { TelemetrySnapshot, ReplicaTelemetry, RecentEvent, RoutingStrategy } from '../api/inferenceApi';
+import type { TelemetrySnapshot, ReplicaTelemetry, RecentEvent, RoutingStrategy, TestTrafficResult } from '../api/inferenceApi';
 import Header from '../components/layout/Header';
+import LiveRoutingVisualizer from '../components/monitoring/LiveRoutingVisualizer';
+import type { AnimatedPacket } from '../components/monitoring/LiveRoutingVisualizer';
+import GanttRequestTimeline from '../components/monitoring/GanttRequestTimeline';
+import AutoTrafficGenerator from '../components/monitoring/AutoTrafficGenerator';
+import ConfigurableWeightsPanel from '../components/monitoring/ConfigurableWeightsPanel';
+
 
 // Helper: Generate SVG sparkline path from numeric array
 function generateSparkline(data: number[], width = 100, height = 24, pad = 2): string {
@@ -95,7 +97,14 @@ export const InferenceMonitoringPage: React.FC = () => {
   // Test traffic runner state
   const [testCount, setTestCount] = useState(5);
   const [isSendingTest, setIsSendingTest] = useState(false);
-  const [testResults, setTestResults] = useState<any[]>([]);
+  const [testResults, setTestResults] = useState<TestTrafficResult[]>([]);
+
+  // Live Visualizer & Gantt Timeline State
+  const [activePackets, setActivePackets] = useState<AnimatedPacket[]>([]);
+  const [recentlyHitPod, setRecentlyHitPod] = useState<string | null>(null);
+  const [isGeneratingTraffic, setIsGeneratingTraffic] = useState<boolean>(false);
+  const [ganttWindowSize, setGanttWindowSize] = useState<number>(30);
+  const [clearedEventIds, setClearedEventIds] = useState<Set<string>>(new Set());
 
   // Log filter & search
   const [searchFilter, setSearchFilter] = useState('');
@@ -104,12 +113,10 @@ export const InferenceMonitoringPage: React.FC = () => {
   // Modal inspection
   const [selectedReplicaModal, setSelectedReplicaModal] = useState<ReplicaTelemetry | null>(null);
 
+
   // Time window for charts (5m, 15m, 1h)
   const [chartTimeWindow, setChartTimeWindow] = useState<'5m' | '15m' | '1h'>('5m');
 
-  // Normalized weights sum
-  const weightSum = (weightLat + weightReq + weightCpu + weightErr).toFixed(2);
-  const isNormalized = Math.abs(parseFloat(weightSum) - 1.0) < 0.02;
 
   // Load telemetry from backend with concurrency protection
   const loadTelemetry = useCallback(async (isManual = false) => {
@@ -165,21 +172,94 @@ export const InferenceMonitoringPage: React.FC = () => {
     };
   }, [refreshInterval, loadTelemetry]);
 
+  // Trigger packet animations flowing from client -> router -> serving replica
+  const triggerPacketAnimations = useCallback((results: TestTrafficResult[]) => {
+    if (!results || results.length === 0) return;
+
+    results.forEach((res, index) => {
+      setTimeout(() => {
+        const packetId = `pkt-${res.request_id}-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`;
+        const newPacket: AnimatedPacket = {
+          id: packetId,
+          requestId: res.request_id,
+          targetReplicaId: res.replica_id,
+          targetPodIndex: 0,
+          status: res.status,
+          latencyMs: res.latency_ms,
+          progress: 0,
+          strategy: res.routing_strategy || activeStrategy,
+          timestamp: Date.now(),
+        };
+
+        setActivePackets((prev) => [...prev.slice(-12), newPacket]);
+
+        const startTime = performance.now();
+        const duration = 650;
+
+        const step = (currentTime: number) => {
+          const elapsed = currentTime - startTime;
+          const progress = Math.min(1.0, elapsed / duration);
+
+          setActivePackets((prev) =>
+            prev.map((p) => (p.id === packetId ? { ...p, progress } : p))
+          );
+
+          if (progress < 1.0) {
+            requestAnimationFrame(step);
+          } else {
+            setRecentlyHitPod(res.replica_id);
+            setTimeout(() => {
+              setRecentlyHitPod(null);
+              setActivePackets((prev) => prev.filter((p) => p.id !== packetId));
+            }, 600);
+          }
+        };
+
+        requestAnimationFrame(step);
+      }, index * 90);
+    });
+  }, [activeStrategy]);
+
   // Handle trigger real test traffic
   const handleSendTestTraffic = async () => {
     setIsSendingTest(true);
     try {
-      toast.loading(`Injecting ${testCount} requests through K8s Service...`, { id: 'test-traffic' });
-      const res = await inferenceApi.sendTestTraffic(testCount);
-      setTestResults(res.requests || []);
+      toast.loading(`Injecting ${testCount} requests through selected routing...`, { id: 'test-traffic' });
+      const res = await inferenceApi.sendTestTraffic(testCount, activeStrategy);
+      const dispatched = res.requests || [];
+      setTestResults(dispatched);
+      triggerPacketAnimations(dispatched);
       toast.success(`Successfully dispatched ${res.count} requests across replicas!`, { id: 'test-traffic' });
-      // Refresh telemetry immediately
       await loadTelemetry(false);
     } catch (err: any) {
       toast.error(`Traffic injection failed: ${err?.message || 'Error'}`, { id: 'test-traffic' });
     } finally {
       setIsSendingTest(false);
     }
+  };
+
+  // Callback from AutoTrafficGenerator
+  const handleAutoTrafficDispatched = useCallback((results: TestTrafficResult[]) => {
+    setTestResults(results);
+    triggerPacketAnimations(results);
+    loadTelemetry(false);
+  }, [triggerPacketAnimations, loadTelemetry]);
+
+  // Save WRR weights to backend and cluster
+  const handleSaveWrrWeights = async (newWeights: number[]) => {
+    const updated = await inferenceApi.setRoutingStrategy(undefined, newWeights);
+    setWrrWeights(updated.wrr_weights);
+    await loadTelemetry(false);
+  };
+
+  // Save adaptive multi-objective weights to backend and cluster
+  const handleSaveAdaptiveWeights = async (weights: { lat: number; req: number; cpu: number; err: number }) => {
+    await inferenceApi.setRoutingStrategy(undefined, undefined, weights);
+    setWeightLat(weights.lat);
+    setWeightReq(weights.req);
+    setWeightCpu(weights.cpu);
+    setWeightErr(weights.err);
+    await loadTelemetry(false);
   };
 
   const handleRoutingStrategyChange = async (strategy: RoutingStrategy) => {
@@ -196,6 +276,7 @@ export const InferenceMonitoringPage: React.FC = () => {
       setChangingStrategy(false);
     }
   };
+
 
   // Export JSON metrics
   const handleExportJson = () => {
@@ -248,21 +329,64 @@ export const InferenceMonitoringPage: React.FC = () => {
     : isAdaptiveRouting ? 'L7 Adaptive Dynamic Routing (40/30/20/10 penalty score)' : 'L7 Round Robin';
 
   const replicas: ReplicaTelemetry[] = telemetry?.replicas || [];
-  const recentEvents: RecentEvent[] = telemetry?.recent_events || [];
+  const telemetryEvents: RecentEvent[] = telemetry?.recent_events || [];
 
-  // Filtered recent events
-  const filteredEvents = recentEvents.filter(ev => {
-    const matchesSearch = !searchFilter ||
+  // Merge recent events from telemetry with local dispatched results for Gantt and table
+  const allTimelineEvents: RecentEvent[] = useMemo(() => {
+    const map = new Map<string, RecentEvent>();
+    // 1. Add from local testResults
+    testResults.forEach((r) => {
+      if (clearedEventIds.has(r.request_id)) return;
+      map.set(r.request_id, {
+        timestamp: r.timestamp || new Date().toISOString().slice(11, 19),
+        request_id: r.request_id,
+        assigned_pod: r.replica_id?.split('-')?.pop() || r.replica_id,
+        replica_id: r.replica_id,
+        routing_mechanism: r.routing_strategy || activeStrategy,
+        observed_latency_ms: r.latency_ms,
+        duration_ms: r.duration_ms || r.latency_ms,
+        start_epoch_ms: r.start_epoch_ms || Date.now(),
+        gateway_latency_ms: r.gateway_latency_ms,
+        upstream_latency_ms: r.upstream_latency_ms,
+        http_status: r.status_text || `${r.status} OK`,
+        status_code: r.status,
+        traffic_type: r.traffic_type || 'test',
+      });
+    });
+    // 2. Add from telemetry recent_events
+    telemetryEvents.forEach((ev) => {
+      if (clearedEventIds.has(ev.request_id)) return;
+      if (!map.has(ev.request_id)) {
+        map.set(ev.request_id, ev);
+      }
+    });
+
+    return Array.from(map.values()).sort((a, b) => {
+      const epochA = a.start_epoch_ms || 0;
+      const epochB = b.start_epoch_ms || 0;
+      if (epochA !== epochB) return epochB - epochA;
+      return b.timestamp.localeCompare(a.timestamp);
+    });
+  }, [testResults, telemetryEvents, activeStrategy, clearedEventIds]);
+
+  const recentEvents: RecentEvent[] = allTimelineEvents;
+
+  // Filtered recent events for table
+  const filteredEvents = recentEvents.filter((ev) => {
+    const matchesSearch =
+      !searchFilter ||
       ev.request_id.toLowerCase().includes(searchFilter.toLowerCase()) ||
       ev.assigned_pod.toLowerCase().includes(searchFilter.toLowerCase()) ||
       ev.replica_id.toLowerCase().includes(searchFilter.toLowerCase());
 
-    const matchesStatus = statusFilter === 'ALL' ||
+    const matchesStatus =
+      statusFilter === 'ALL' ||
       (statusFilter === '200' && ev.http_status.includes('200')) ||
       (statusFilter === 'ERR' && !ev.http_status.includes('200'));
 
     return matchesSearch && matchesStatus;
   });
+
 
   // Extract real history series for sparklines & charts
   const historyThroughput = telemetry?.history?.throughput_trend?.map(t => t.rps) || [];
@@ -630,283 +754,27 @@ export const InferenceMonitoringPage: React.FC = () => {
           </div>
         </div>
 
-        {/* ==================== SECTION 2: Live inference routing topology ==================== */}
-        <div className="w-full p-5 sm:p-6 rounded-xl bg-white border border-slate-200 shadow-sm">
-          {/* Topology Header */}
-          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pb-4 mb-5 border-b border-slate-100">
-            <div className="flex items-center gap-3">
-              <div className="flex items-center gap-2">
-                <div className="p-1.5 rounded-lg bg-blue-50 text-blue-600">
-                  <Layers size={18} />
-                </div>
-                <h2 className="text-base sm:text-lg font-bold text-slate-900">
-                  Live inference routing topology
-                </h2>
-              </div>
-              <div className="flex items-center p-0.5 rounded-lg bg-slate-100 text-xs">
-                <button className="px-2.5 py-1 rounded bg-white shadow-sm text-slate-900 font-semibold">
-                  Live node topology
-                </button>
-                <button
-                  onClick={() => toast('Graph Matrix view available in cluster monitoring expansion.')}
-                  className="px-2.5 py-1 rounded text-slate-500 hover:text-slate-900"
-                >
-                  Graph Matrix
-                </button>
-              </div>
-            </div>
+        {/* ==================== SECTION 2: LIVE INFERENCE ROUTING TOPOLOGY ==================== */}
+        <LiveRoutingVisualizer
+          replicas={replicas}
+          activeStrategy={activeStrategy}
+          activeStrategyTitle={activeStrategyTitle}
+          isGatewayActive={isGatewayActive}
+          activePackets={activePackets}
+          recentlyHitPod={recentlyHitPod}
+          onSelectReplica={(r) => setSelectedReplicaModal(r)}
+          throughputRps={summary.throughput_rps}
+          isGeneratingTraffic={isGeneratingTraffic}
+        />
 
-            <div className="flex items-center gap-2 text-xs">
-              <span className="font-mono text-slate-500">Scope:</span>
-              <span className="px-2.5 py-1 rounded bg-slate-100 font-mono font-medium text-slate-800 border border-slate-200">
-                All Pods ({summary.healthy_replicas} Active)
-              </span>
-              <button
-                onClick={() => setRefreshInterval(refreshInterval === 0 ? 5000 : 0)}
-                className="p-1 rounded text-slate-500 hover:bg-slate-100 transition-colors"
-                title={refreshInterval > 0 ? 'Pause Live Stream' : 'Resume Live Stream'}
-              >
-                {refreshInterval > 0 ? <Pause size={16} /> : <Play size={16} />}
-              </button>
-            </div>
-          </div>
-
-          {/* Interactive Topology Graphic */}
-          <div className="relative w-full rounded-xl bg-slate-50/70 p-5 sm:p-6 overflow-x-auto border border-slate-200/80">
-            <div className="min-w-[940px] grid grid-cols-12 gap-5 items-center">
-              {/* STEP 1: Incoming Traffic Column (3 Cols) */}
-              <div className="col-span-3 flex flex-col gap-3">
-                <div className="p-4 rounded-xl bg-white border border-slate-200 shadow-sm relative">
-                  <div className="absolute -top-2.5 left-3 px-2 py-0.5 rounded bg-slate-900 text-white font-mono text-[10px] font-semibold uppercase">
-                    Ingress pipeline
-                  </div>
-                  <div className="flex items-center justify-between mb-2 pt-1">
-                    <span className="font-bold text-slate-900 text-sm">Client Traffic</span>
-                    <span className={`px-2 py-0.5 rounded font-mono text-xs font-bold border ${
-                      hasActiveTraffic
-                        ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                        : 'bg-slate-100 text-slate-600 border-slate-200'
-                    }`}>
-                      {summary.throughput_rps.toFixed(1)} rps
-                    </span>
-                  </div>
-                  <p className="text-xs text-slate-500 mb-3">
-                    Concurrent model requests dispatched via cluster ingress mesh.
-                  </p>
-                  <div className="space-y-1.5 font-mono text-xs">
-                    <div className="flex justify-between items-center p-2 rounded bg-slate-50 border border-slate-100">
-                      <span className="text-slate-500">Protocols</span>
-                      <span className="font-semibold text-slate-900">HTTP/1.1 & HTTP/2</span>
-                    </div>
-                    <div className="flex justify-between items-center p-2 rounded bg-slate-50 border border-slate-100">
-                      <span className="text-slate-500">Payload Format</span>
-                      <span className="font-semibold text-slate-900">JSON Features (Titanic)</span>
-                    </div>
-                    <div className="flex justify-between items-center p-2 rounded bg-slate-50 border border-slate-100">
-                      <span className="text-slate-500">Target Service</span>
-                      <span className="font-semibold text-slate-900 font-mono">
-                        {isGatewayActive ? 'inference-gateway:8080' : 'inference-service:8000'}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* DIRECTIONAL ARROW 1 (1 Col) - ONLY ANIMATES ON ACTIVE TRAFFIC */}
-              <div className="col-span-1 flex flex-col items-center justify-center">
-                <div className="flex flex-col items-center gap-1 text-center">
-                  <span className={`font-mono text-[11px] font-semibold ${
-                    hasActiveTraffic ? (isGatewayActive ? 'text-emerald-600 animate-pulse' : 'text-blue-600 animate-pulse') : 'text-slate-400'
-                  }`}>
-                    {hasActiveTraffic ? `${summary.throughput_rps} rps` : 'idle'}
-                  </span>
-                  <div className={`w-full flex items-center justify-center ${hasActiveTraffic ? (isGatewayActive ? 'text-emerald-600' : 'text-blue-600') : 'text-slate-400'}`}>
-                    <svg fill="none" height="24" viewBox="0 0 48 24" width="48">
-                      <path
-                        d="M0,12 L38,12 M32,6 L40,12 L32,18"
-                        stroke="currentColor"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth="2.5"
-                      />
-                      {/* Animated packet dot only during live traffic */}
-                      {hasActiveTraffic ? (
-                        <circle cx="20" cy="12" r="3" fill={isGatewayActive ? '#059669' : '#2563EB'} className="animate-ping" />
-                      ) : (
-                        <circle cx="20" cy="12" r="2.5" fill="#94A3B8" />
-                      )}
-                    </svg>
-                  </div>
-                  <span className="text-[9px] uppercase tracking-wider text-slate-500 font-semibold">
-                    {isGatewayActive ? 'Gateway HTTP' : 'ClusterIP'}
-                  </span>
-                </div>
-              </div>
-
-              {/* STEP 2: Central Gateway Node (4 Cols) */}
-              <div className="col-span-4 flex flex-col">
-                <div className={`p-4 rounded-xl bg-white border shadow-md relative ${
-                  isGatewayActive
-                    ? 'border-emerald-200/80 ring-2 ring-emerald-500/10'
-                    : 'border-blue-200/80 ring-2 ring-blue-500/10'
-                }`}>
-                  <div className="flex items-center justify-between pb-2 mb-2 border-b border-slate-100">
-                    <div className="flex items-center gap-2">
-                      <span className={`w-2.5 h-2.5 rounded-full ${
-                        hasActiveTraffic
-                          ? (isGatewayActive ? 'bg-emerald-600 animate-ping' : 'bg-blue-600 animate-ping')
-                          : 'bg-slate-400'
-                      }`} />
-                      <span className="font-bold text-slate-900 text-sm">
-                        {isGatewayActive ? `Custom ${activeStrategyTitle} Gateway` : 'Native K8s Service Router'}
-                      </span>
-                    </div>
-                    <span className={`px-2 py-0.5 rounded text-white font-mono text-[10px] font-semibold ${
-                      isGatewayActive ? 'bg-emerald-600' : 'bg-blue-600'
-                    }`}>
-                      {isGatewayActive ? 'L7 PROXY' : 'L4 IPTABLES'}
-                    </span>
-                  </div>
-
-                  {/* Mathematical Formula Representation */}
-                  <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-200 mb-3">
-                    <span className="text-[10px] uppercase font-bold text-slate-500 tracking-wider block mb-1">
-                      OBJECTIVE PENALTY SCORE (BENCHMARK PREVIEW SIMULATION)
-                    </span>
-                    <code className="font-mono text-[11px] text-slate-800 block leading-tight font-medium bg-white p-2 rounded border border-slate-200">
-                      S<sub>i</sub> = {weightLat.toFixed(2)}·L<sub>norm</sub> + {weightReq.toFixed(2)}·R<sub>norm</sub> + {weightCpu.toFixed(2)}·C<sub>norm</sub> + {weightErr.toFixed(2)}·E<sub>norm</sub>
-                    </code>
-                    <span className="text-[10px] text-slate-400 mt-1 block">
-                      *Preview calculation only; actual traffic routed via {isGatewayActive ? `Custom ${activeStrategyTitle} Gateway` : 'native K8s L4 iptables'}.
-                    </span>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-2 text-xs font-mono">
-                    <div className="p-2 rounded bg-slate-50 border border-slate-100">
-                      <span className="text-slate-500 block text-[11px]">Routing Mechanism</span>
-                      <span className="text-xs font-bold text-slate-900">
-                        {isGatewayActive ? gatewayMechanism : 'K8s L4 iptables'}
-                      </span>
-                    </div>
-                    <div className="p-2 rounded bg-slate-50 border border-slate-100">
-                      <span className="text-slate-500 block text-[11px]">Total Routed</span>
-                      <span className="text-sm font-bold text-slate-900">{summary.total_requests.toLocaleString()}</span>
-                    </div>
-                  </div>
-
-                  {/* Cumulative dispatch counts across the current replica lifetimes */}
-                  <div className="mt-3 pt-2 border-t border-slate-100 flex flex-col gap-1.5 font-mono text-xs">
-                    {replicas.map((rep) => (
-                      <div
-                        key={rep.name}
-                        className="flex items-center justify-between px-2.5 py-1 rounded bg-slate-50 text-slate-700"
-                      >
-                        <span className="flex items-center gap-1.5">
-                          <span className="w-2 h-2 rounded-full" style={{ backgroundColor: rep.color }} />
-                          <span>To {rep.name}</span>
-                          {rep.is_optimal && (
-                            <span className="text-[9px] bg-slate-200 text-slate-700 px-1.5 py-0.2 rounded font-semibold uppercase">
-                              PREVIEW: LOWEST PENALTY
-                            </span>
-                          )}
-                        </span>
-                        <span style={{ color: rep.color }} className="font-bold">
-                          {rep.traffic_share_pct}% ({rep.requests_served} reqs)
-                        </span>
-                      </div>
-                    ))}
-                    <span className="text-[9px] text-slate-400 font-sans">
-                      Cumulative pod counts; shares reflect traffic since pod start and update as new requests arrive.
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-              {/* STEP 3: Distributed Replicas (4 Cols) */}
-              <div className="col-span-4 flex flex-col gap-2.5">
-                {replicas.map((rep) => (
-                  <div
-                    key={rep.name}
-                    className="p-3 rounded-xl bg-white border border-slate-200 shadow-sm hover:border-slate-300 transition-all"
-                  >
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <div
-                          className="w-2.5 h-2.5 rounded-full"
-                          style={{ backgroundColor: rep.is_ready ? '#10B981' : '#EF4444' }}
-                        />
-                        <span className="font-bold text-slate-900 text-xs font-mono">{rep.name}</span>
-                        <span className="font-mono text-[11px] text-slate-400">{rep.pod_ip}</span>
-                      </div>
-                      <span className="font-mono text-xs px-2 py-0.5 rounded font-bold bg-slate-100 text-slate-700">
-                        Score (Preview): {rep.score.toFixed(3)}
-                      </span>
-                    </div>
-
-                    <div className="grid grid-cols-4 gap-1.5 mt-2 text-center font-mono text-xs">
-                      <div className="bg-slate-50 p-1 rounded border border-slate-100">
-                        <span className="text-slate-400 block text-[9px]">P95</span>
-                        <span className="font-bold text-slate-800">
-                          {rep.p95_latency_ms != null ? `${rep.p95_latency_ms}ms` : (rep.requests_served < 5 ? `n=${rep.requests_served}` : 'N/A')}
-                        </span>
-                      </div>
-                      <div className="bg-slate-50 p-1 rounded border border-slate-100">
-                        <span className="text-slate-400 block text-[9px]">Active</span>
-                        <span className="font-bold text-slate-800">{rep.active_requests} req</span>
-                      </div>
-                      <div className="bg-slate-50 p-1 rounded border border-slate-100">
-                        <span className="text-slate-400 block text-[9px]">CPU</span>
-                        <span className="font-bold text-slate-800">
-                          {rep.cpu_pct != null ? `${rep.cpu_pct.toFixed(0)}%` : 'N/A'}
-                        </span>
-                      </div>
-                      <div className="bg-slate-50 p-1 rounded border border-slate-100">
-                        <span className="text-slate-400 block text-[9px]">Share</span>
-                        <span className="font-bold" style={{ color: rep.color }}>
-                          {rep.traffic_share_pct}%
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-
-          {/* Live Decision Rationale Callout */}
-          <div className="mt-4 p-3 rounded-lg bg-slate-50 border border-slate-200 flex flex-col md:flex-row items-start md:items-center justify-between gap-2 text-xs">
-            <div className="flex items-center gap-2">
-              <span className="p-1 rounded bg-blue-600 text-white">
-                <Terminal size={14} />
-              </span>
-              <div className="flex flex-wrap items-center gap-1.5 text-slate-700">
-                <span className="font-bold text-slate-900">Latest Dispatched Event:</span>
-                {recentEvents.length > 0 ? (
-                  <>
-                    <span>Request</span>
-                    <span className="font-mono font-semibold bg-white px-1.5 py-0.5 rounded border border-slate-200 text-blue-600">
-                      {recentEvents[0].request_id}
-                    </span>
-                    <span>routed to</span>
-                    <span className="font-bold text-emerald-700">
-                      {recentEvents[0].assigned_pod}
-                    </span>
-                    <span className="text-slate-500">
-                      (Observed latency {recentEvents[0].observed_latency_ms} ms with status {recentEvents[0].http_status}).
-                    </span>
-                  </>
-                ) : (
-                  <span className="text-slate-500">
-                    Ready for traffic. Click "Send Test Traffic" above to generate live inference dispatches.
-                  </span>
-                )}
-              </div>
-            </div>
-            <span className="font-mono text-slate-400 text-[11px]">
-              Sync: {summary.last_sync_utc}
-            </span>
-          </div>
-        </div>
+        {/* ==================== SECTION 2B: GANTT-STYLE REQUEST TIMELINE ==================== */}
+        <GanttRequestTimeline
+          events={allTimelineEvents}
+          replicas={replicas}
+          windowSize={ganttWindowSize}
+          onWindowSizeChange={setGanttWindowSize}
+          onClearEvents={() => setClearedEventIds(new Set(allTimelineEvents.map(e => e.request_id)))}
+        />
 
         {/* ==================== SECTION 3: ROUTING STRATEGIES & OBJECTIVE WEIGHT TUNING ==================== */}
         <div id="objective-tuning-panel" className="grid grid-cols-1 xl:grid-cols-12 gap-5">
@@ -936,7 +804,7 @@ export const InferenceMonitoringPage: React.FC = () => {
                     name="strategy"
                     checked={activeStrategy === 'round_robin'}
                     onChange={() => handleRoutingStrategyChange('round_robin')}
-                    disabled={changingStrategy}
+                    disabled={changingStrategy || isGeneratingTraffic}
                     className={`mt-0.5 ${activeStrategy === 'round_robin' ? 'text-emerald-600 focus:ring-0' : 'text-slate-400 focus:ring-0'}`}
                   />
                   <div className="flex flex-col">
@@ -967,7 +835,7 @@ export const InferenceMonitoringPage: React.FC = () => {
                     name="strategy"
                     checked={activeStrategy === 'native'}
                     onChange={() => handleRoutingStrategyChange('native')}
-                    disabled={changingStrategy}
+                    disabled={changingStrategy || isGeneratingTraffic}
                     className={`mt-0.5 ${activeStrategy === 'native' ? 'text-blue-600 focus:ring-0' : 'text-slate-400 focus:ring-0'}`}
                   />
                   <div className="flex flex-col">
@@ -994,7 +862,7 @@ export const InferenceMonitoringPage: React.FC = () => {
                     name="strategy"
                     checked={activeStrategy === 'weighted_round_robin'}
                     onChange={() => handleRoutingStrategyChange('weighted_round_robin')}
-                    disabled={changingStrategy}
+                    disabled={changingStrategy || isGeneratingTraffic}
                     className="mt-0.5 text-slate-400 focus:ring-0"
                   />
                   <div className="flex flex-col">
@@ -1017,7 +885,7 @@ export const InferenceMonitoringPage: React.FC = () => {
                     name="strategy"
                     checked={activeStrategy === 'adaptive'}
                     onChange={() => handleRoutingStrategyChange('adaptive')}
-                    disabled={changingStrategy}
+                    disabled={changingStrategy || isGeneratingTraffic}
                     className="mt-0.5 text-slate-400 focus:ring-0"
                   />
                   <div className="flex flex-col">
@@ -1050,173 +918,16 @@ export const InferenceMonitoringPage: React.FC = () => {
             </div>
           </div>
 
-          {/* Weight Tuning & Safety Parameters (7 Cols) - LABELED AS SIMULATION PREVIEW */}
-          <div className="xl:col-span-7 p-5 rounded-xl bg-white border border-slate-200 shadow-sm flex flex-col justify-between">
-            <div>
-              <div className="flex items-center justify-between mb-2">
-                <div>
-                  <div className="flex items-center gap-2">
-                    <h3 className="text-base font-bold text-slate-900">Objective Weight Tuning (Simulation Preview)</h3>
-                    <span className="px-2 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200 font-mono text-[9px] font-bold">
-                      Simulation only · no live impact
-                    </span>
-                  </div>
-                  <span className="text-xs text-slate-500">
-                    Adjust prospective penalty coefficients for offline ranking analysis and what-if scoring. Live traffic uses {isGatewayActive ? `${activeStrategyTitle} Gateway` : 'Native K8s Service'}.
-                  </span>
-                </div>
-                <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded font-mono text-xs font-bold ${
-                  isNormalized
-                    ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                    : 'bg-amber-50 text-amber-700 border border-amber-200'
-                }`}>
-                  <CheckCircle2 size={13} />
-                  <span>Sum: {weightSum} ({isNormalized ? 'Normalized' : 'Unnormalized'})</span>
-                </div>
-              </div>
-
-              {/* Sliders Matrix */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-3">
-                {/* Weight 1: Latency */}
-                <div className="p-3 rounded-lg bg-slate-50 border border-slate-200">
-                  <div className="flex justify-between items-center mb-1">
-                    <label className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
-                      <Clock size={14} className="text-blue-600" />
-                      Latency (L<sub>norm</sub>)
-                    </label>
-                    <span className="font-mono text-xs font-bold text-blue-600 bg-white px-2 py-0.5 rounded border border-slate-200">
-                      {weightLat.toFixed(2)}
-                    </span>
-                  </div>
-                  <input
-                    type="range"
-                    min="0"
-                    max="1"
-                    step="0.05"
-                    value={weightLat}
-                    onChange={(e) => setWeightLat(parseFloat(e.target.value))}
-                    className="w-full h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
-                  />
-                  <p className="text-[11px] text-slate-500 mt-1">Impact of recent P95 latency measurements.</p>
-                </div>
-
-                {/* Weight 2: Active Reqs */}
-                <div className="p-3 rounded-lg bg-slate-50 border border-slate-200">
-                  <div className="flex justify-between items-center mb-1">
-                    <label className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
-                      <Activity size={14} className="text-blue-600" />
-                      Active Requests (R<sub>norm</sub>)
-                    </label>
-                    <span className="font-mono text-xs font-bold text-blue-600 bg-white px-2 py-0.5 rounded border border-slate-200">
-                      {weightReq.toFixed(2)}
-                    </span>
-                  </div>
-                  <input
-                    type="range"
-                    min="0"
-                    max="1"
-                    step="0.05"
-                    value={weightReq}
-                    onChange={(e) => setWeightReq(parseFloat(e.target.value))}
-                    className="w-full h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
-                  />
-                  <p className="text-[11px] text-slate-500 mt-1">Queue pressure and in-flight inference count.</p>
-                </div>
-
-                {/* Weight 3: CPU Load */}
-                <div className="p-3 rounded-lg bg-slate-50 border border-slate-200">
-                  <div className="flex justify-between items-center mb-1">
-                    <label className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
-                      <Cpu size={14} className="text-blue-600" />
-                      CPU Compute (C<sub>norm</sub>)
-                    </label>
-                    <span className="font-mono text-xs font-bold text-blue-600 bg-white px-2 py-0.5 rounded border border-slate-200">
-                      {weightCpu.toFixed(2)}
-                    </span>
-                  </div>
-                  <input
-                    type="range"
-                    min="0"
-                    max="1"
-                    step="0.05"
-                    value={weightCpu}
-                    onChange={(e) => setWeightCpu(parseFloat(e.target.value))}
-                    className="w-full h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
-                  />
-                  <p className="text-[11px] text-slate-500 mt-1">Host CPU saturation from Metrics Server.</p>
-                </div>
-
-                {/* Weight 4: Error Rate */}
-                <div className="p-3 rounded-lg bg-slate-50 border border-slate-200">
-                  <div className="flex justify-between items-center mb-1">
-                    <label className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
-                      <AlertTriangle size={14} className="text-blue-600" />
-                      Error Rate (E<sub>norm</sub>)
-                    </label>
-                    <span className="font-mono text-xs font-bold text-blue-600 bg-white px-2 py-0.5 rounded border border-slate-200">
-                      {weightErr.toFixed(2)}
-                    </span>
-                  </div>
-                  <input
-                    type="range"
-                    min="0"
-                    max="1"
-                    step="0.05"
-                    value={weightErr}
-                    onChange={(e) => setWeightErr(parseFloat(e.target.value))}
-                    className="w-full h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
-                  />
-                  <p className="text-[11px] text-slate-500 mt-1">Penalty multiplier for non-2xx responses.</p>
-                </div>
-              </div>
-            </div>
-
-            {/* Controls & Presets */}
-            <div className="mt-4 pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-3 text-xs">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="text-slate-500 font-mono text-[11px]">Presets:</span>
-                <button
-                  onClick={() => {
-                    setWeightLat(0.40);
-                    setWeightReq(0.30);
-                    setWeightCpu(0.20);
-                    setWeightErr(0.10);
-                    toast('Reset to default weights (40 / 30 / 20 / 10)');
-                  }}
-                  className="px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium transition-colors"
-                >
-                  Standard
-                </button>
-                <button
-                  onClick={() => {
-                    setWeightLat(0.70);
-                    setWeightReq(0.10);
-                    setWeightCpu(0.10);
-                    setWeightErr(0.10);
-                    toast('Applied Latency Sensitive preset');
-                  }}
-                  className="px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium transition-colors"
-                >
-                  Latency Sensitive
-                </button>
-                <button
-                  onClick={() => {
-                    setWeightLat(0.20);
-                    setWeightReq(0.50);
-                    setWeightCpu(0.20);
-                    setWeightErr(0.10);
-                    toast('Applied Queue Heavy preset');
-                  }}
-                  className="px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium transition-colors"
-                >
-                  Queue Heavy
-                </button>
-              </div>
-
-              <span className="text-slate-400 font-mono text-[10px]">
-                {`Simulation preview only • ${activeStrategyTitle} routing active`}
-              </span>
-            </div>
+          {/* Configurable Live Weights & Adaptive Objective Tuning (7 Cols) */}
+          <div className="xl:col-span-7">
+            <ConfigurableWeightsPanel
+              replicas={replicas}
+              activeStrategy={activeStrategy}
+              confirmedWrrWeights={wrrWeights}
+              confirmedAdaptiveWeights={{ lat: weightLat, req: weightReq, cpu: weightCpu, err: weightErr }}
+              onSaveWrrWeights={handleSaveWrrWeights}
+              onSaveAdaptiveWeights={handleSaveAdaptiveWeights}
+            />
           </div>
         </div>
 
@@ -1625,93 +1336,15 @@ export const InferenceMonitoringPage: React.FC = () => {
             </div>
           </div>
 
-          {/* Right Column (4 Cols): Benchmark / Traffic Injection Control */}
-          <div className="xl:col-span-4 p-5 rounded-xl bg-white border border-slate-200 shadow-sm flex flex-col justify-between">
-            <div>
-              <div className="flex items-center justify-between mb-2">
-                <div className="flex items-center gap-2">
-                  <Activity size={18} className="text-blue-600" />
-                  <h3 className="text-base font-bold text-slate-900">Traffic Generation Harness</h3>
-                </div>
-                <span className={`px-2 py-0.5 rounded font-mono text-[10px] font-bold border ${
-                  isGatewayActive
-                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                    : 'bg-blue-50 text-blue-700 border-blue-200'
-                }`}>
-                  {isGatewayActive ? 'L7 gateway dispatch' : 'Kubernetes service dispatch'}
-                </span>
-              </div>
-              <p className="text-xs text-slate-500 mb-4">
-                Send actual prediction requests through {isGatewayActive ? 'inference gateway' : 'native Kubernetes Service ClusterIP'} to verify load distribution.
-              </p>
-
-              {/* Traffic details card */}
-              <div className="p-3.5 rounded-lg bg-slate-50 border border-slate-200 mb-4">
-                <div className="flex justify-between items-center text-xs text-slate-600 mb-2">
-                  <span className="font-medium">Target Service</span>
-                  <span className="font-mono font-bold text-slate-900">{isGatewayActive ? 'inference-gateway:8080' : 'inference-service:8000'}</span>
-                </div>
-                <div className="flex justify-between items-center text-xs text-slate-600 mb-2">
-                  <span className="font-medium">Routing Mechanism</span>
-                  <span className="font-mono text-slate-900">{isGatewayActive ? gatewayMechanism : 'IPTables L4 Round-Robin'}</span>
-                </div>
-                <div className="flex justify-between items-center text-xs text-slate-600">
-                  <span className="font-medium">Observed Replicas</span>
-                  <span className="font-mono text-emerald-600 font-semibold">{summary.healthy_replicas} Healthy</span>
-                </div>
-
-                {/* Last Run Results */}
-                {testResults.length > 0 && (
-                  <div className="mt-3 pt-2.5 border-t border-slate-200">
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block mb-1.5">
-                      Last Dispatched Batch ({testResults.length} requests):
-                    </span>
-                    <div className="space-y-1 max-h-24 overflow-y-auto font-mono text-[11px]">
-                      {testResults.slice(0, 4).map((r, i) => (
-                        <div key={i} className="flex justify-between items-center text-slate-700 bg-white p-1 rounded border border-slate-100">
-                          <span className="text-blue-600 font-semibold truncate max-w-[90px]">{r.request_id}</span>
-                          <span className="truncate max-w-[100px] text-slate-600">{r.replica_id?.split('-')?.pop() || 'pod'}</span>
-                          <span className="text-emerald-600 font-bold">{r.latency_ms}ms</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {/* Safe environment notice */}
-              <div className={`p-2.5 rounded border text-xs flex items-start gap-2 ${
-                isGatewayActive ? 'bg-emerald-50/60 border-emerald-200 text-slate-700' : 'bg-blue-50/60 border-blue-200 text-slate-600'
-              }`}>
-                <ShieldCheck size={16} className={isGatewayActive ? "text-emerald-600 shrink-0 mt-0.5" : "text-blue-600 shrink-0 mt-0.5"} />
-                <span>
-                  {isGatewayActive
-                    ? 'Traffic dispatched via live inference gateway. Replicas rotate sequentially and metrics reflect in Prometheus and Grafana.'
-                    : 'Traffic dispatched to native ClusterIP. Real metrics reflect in Prometheus and Grafana.'}
-                </span>
-              </div>
-            </div>
-
-            {/* Run Button */}
-            <div className="mt-5 pt-3 border-t border-slate-100">
-              <button
-                onClick={handleSendTestTraffic}
-                disabled={isSendingTest}
-                className="w-full py-2.5 px-4 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-medium text-xs flex items-center justify-center gap-2 shadow-sm transition-colors"
-              >
-                {isSendingTest ? (
-                  <>
-                    <RotateCw size={14} className="animate-spin" />
-                    <span>Dispatching {testCount} Requests...</span>
-                  </>
-                ) : (
-                  <>
-                    <Play size={14} fill="currentColor" />
-                    <span>Send {testCount} Test Requests Now</span>
-                  </>
-                )}
-              </button>
-            </div>
+          {/* Right Column (4 Cols): Automatic Traffic Generator */}
+          <div className="xl:col-span-4">
+            <AutoTrafficGenerator
+              activeStrategy={activeStrategy}
+              activeStrategyTitle={activeStrategyTitle}
+              isGatewayActive={isGatewayActive}
+              onTrafficDispatched={handleAutoTrafficDispatched}
+              onActiveTrafficChange={setIsGeneratingTraffic}
+            />
           </div>
         </div>
 
