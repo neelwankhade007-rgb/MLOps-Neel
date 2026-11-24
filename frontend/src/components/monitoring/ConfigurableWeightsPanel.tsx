@@ -31,7 +31,7 @@ export const ConfigurableWeightsPanel: React.FC<ConfigurableWeightsPanelProps> =
   onSaveAdaptiveWeights,
 }) => {
   // Local Draft State for WRR weights - sized dynamically to discovered replicas
-  const [draftWeights, setDraftWeights] = useState<number[]>([]);
+  const [draftWeights, setDraftWeights] = useState<Array<number | ''>>([]);
   const [isSavingWrr, setIsSavingWrr] = useState<boolean>(false);
 
   // Local Draft State for Adaptive weights
@@ -41,17 +41,25 @@ export const ConfigurableWeightsPanel: React.FC<ConfigurableWeightsPanelProps> =
   const [adaptiveErr, setAdaptiveErr] = useState<number>(confirmedAdaptiveWeights.err);
   const [isSavingAdaptive, setIsSavingAdaptive] = useState<boolean>(false);
 
-  // Synchronize draft WRR weights whenever confirmed weights or replicas change
+  // Polling creates new arrays and replica objects on every refresh. Track their
+  // values so a routine refresh doesn't wipe edits in these draft inputs.
+  const confirmedWrrKey = confirmedWrrWeights.join(':');
+  const confirmedWrrValues = useMemo(
+    () => confirmedWrrKey ? confirmedWrrKey.split(':').map(Number) : [],
+    [confirmedWrrKey],
+  );
+  const replicaKey = replicas.map((replica) => replica.replica_id).join(':');
+
   useEffect(() => {
     const targetCount = Math.max(1, replicas.length);
     const initial = Array.from({ length: targetCount }, (_, i) => {
-      if (i < confirmedWrrWeights.length) {
-        return confirmedWrrWeights[i];
+      if (i < confirmedWrrValues.length) {
+        return confirmedWrrValues[i];
       }
       return 1;
     });
     setDraftWeights(initial);
-  }, [confirmedWrrWeights, replicas]);
+  }, [confirmedWrrValues, replicaKey, replicas.length]);
 
   // Synchronize adaptive weights when confirmed change
   useEffect(() => {
@@ -59,7 +67,12 @@ export const ConfigurableWeightsPanel: React.FC<ConfigurableWeightsPanelProps> =
     setAdaptiveReq(confirmedAdaptiveWeights.req);
     setAdaptiveCpu(confirmedAdaptiveWeights.cpu);
     setAdaptiveErr(confirmedAdaptiveWeights.err);
-  }, [confirmedAdaptiveWeights]);
+  }, [
+    confirmedAdaptiveWeights.lat,
+    confirmedAdaptiveWeights.req,
+    confirmedAdaptiveWeights.cpu,
+    confirmedAdaptiveWeights.err,
+  ]);
 
   // Check for unsaved WRR changes
   const hasUnsavedWrr = useMemo(() => {
@@ -79,7 +92,7 @@ export const ConfigurableWeightsPanel: React.FC<ConfigurableWeightsPanelProps> =
 
   // Compute WRR total and percentages
   const wrrTotal = useMemo(() => {
-    return draftWeights.reduce((sum, w) => sum + Math.max(1, w), 0);
+    return draftWeights.reduce<number>((sum, w) => sum + Math.max(1, typeof w === 'number' ? w : 1), 0);
   }, [draftWeights]);
 
   // Compute Adaptive sum
@@ -87,11 +100,21 @@ export const ConfigurableWeightsPanel: React.FC<ConfigurableWeightsPanelProps> =
   const isAdaptiveNormalized = Math.abs(parseFloat(adaptiveSum) - 1.0) < 0.02;
 
   // Handle individual replica weight change
-  const handleWeightChange = (index: number, val: number) => {
-    const clamped = Math.max(1, Math.min(100, Math.floor(val) || 1));
+  const handleWeightChange = (index: number, rawValue: string) => {
+    const parsed = rawValue === '' ? '' : Math.floor(Number(rawValue));
+    const nextValue = parsed === '' ? '' : Math.max(1, Math.min(100, parsed || 1));
     setDraftWeights((prev) => {
       const next = [...prev];
-      next[index] = clamped;
+      next[index] = nextValue;
+      return next;
+    });
+  };
+
+  const handleWeightBlur = (index: number) => {
+    setDraftWeights((prev) => {
+      if (prev[index] !== '') return prev;
+      const next = [...prev];
+      next[index] = confirmedWrrWeights[index] ?? 1;
       return next;
     });
   };
@@ -99,14 +122,14 @@ export const ConfigurableWeightsPanel: React.FC<ConfigurableWeightsPanelProps> =
   // Handle Save WRR Weights
   const handleApplyWrr = async () => {
     // Validation: All weights must be positive integers
-    if (draftWeights.some((w) => isNaN(w) || w <= 0)) {
+    if (draftWeights.some((w) => w === '' || !Number.isInteger(w) || w <= 0)) {
       toast.error('All replica weights must be positive integers (> 0)');
       return;
     }
 
     setIsSavingWrr(true);
     try {
-      await onSaveWrrWeights(draftWeights);
+      await onSaveWrrWeights(draftWeights as number[]);
       toast.success(`Weighted Round Robin weights saved & applied: ${draftWeights.join(':')}`);
     } catch (err: any) {
       toast.error(`Failed to apply weights: ${err?.message || 'Error'}`);
@@ -203,7 +226,8 @@ export const ConfigurableWeightsPanel: React.FC<ConfigurableWeightsPanelProps> =
             <div className="space-y-3">
               {replicas.map((rep, idx) => {
                 const currentWeight = draftWeights[idx] !== undefined ? draftWeights[idx] : 1;
-                const sharePct = wrrTotal > 0 ? ((currentWeight / wrrTotal) * 100).toFixed(1) : '0.0';
+                const weightForShare = currentWeight === '' ? 1 : currentWeight;
+                const sharePct = wrrTotal > 0 ? ((weightForShare / wrrTotal) * 100).toFixed(1) : '0.0';
 
                 return (
                   <div
@@ -234,7 +258,8 @@ export const ConfigurableWeightsPanel: React.FC<ConfigurableWeightsPanelProps> =
                         max="100"
                         step="1"
                         value={currentWeight}
-                        onChange={(e) => handleWeightChange(idx, parseInt(e.target.value, 10))}
+                        onChange={(e) => handleWeightChange(idx, e.target.value)}
+                        onBlur={() => handleWeightBlur(idx)}
                         className={`w-16 px-2 py-1 rounded font-mono text-xs font-bold text-center border focus:outline-none ${
                           hasUnsavedWrr && currentWeight !== confirmedWrrWeights[idx]
                             ? 'border-amber-400 bg-amber-50/50 text-amber-900 ring-2 ring-amber-400/20'

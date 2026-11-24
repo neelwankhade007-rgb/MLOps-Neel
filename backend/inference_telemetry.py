@@ -7,6 +7,7 @@ import uuid
 import urllib.request
 import urllib.error
 from datetime import datetime
+from urllib.parse import urlparse
 from concurrent.futures import ThreadPoolExecutor
 from collections import deque
 from typing import Dict, Any, List, Optional
@@ -171,6 +172,7 @@ class TelemetryAggregator:
             with urllib.request.urlopen(req, timeout=1.5) as resp:
                 elapsed_ms = (time.perf_counter() - t0) * 1000.0
                 data = json.loads(resp.read().decode())
+                data["endpoint_ip"] = target
                 data["network_ping_ms"] = round(elapsed_ms, 2)
                 data["reachable"] = True
                 return data
@@ -178,6 +180,7 @@ class TelemetryAggregator:
             elapsed_ms = (time.perf_counter() - t0) * 1000.0
             return {
                 "replica_id": target,
+                "endpoint_ip": target,
                 "is_ready": False,
                 "reachable": False,
                 "requests_served": 0,
@@ -248,6 +251,30 @@ class TelemetryAggregator:
             "available_replicas": 0
         }
 
+    def get_gateway_adaptive_decision(self) -> Dict[str, Any]:
+        """Fetch the latest real adaptive decision without recalculating its scores."""
+        gateway_host = os.environ.get("GATEWAY_URL", "http://inference-gateway:8080")
+        try:
+            req = urllib.request.Request(
+                f"{gateway_host}/adaptive-scores",
+                headers={"User-Agent": "Nexus-Telemetry-Aggregator"},
+            )
+            with urllib.request.urlopen(req, timeout=1.2) as resp:
+                payload = json.loads(resp.read().decode())
+            scores_by_ip = {}
+            for endpoint, score in payload.get("scores", {}).items():
+                endpoint_ip = urlparse(endpoint).hostname
+                if endpoint_ip:
+                    scores_by_ip[endpoint_ip] = score
+            selected_endpoint = payload.get("selected_endpoint")
+            return {
+                "scores_by_ip": scores_by_ip,
+                "selected_ip": urlparse(selected_endpoint).hostname if selected_endpoint else None,
+                "calculated_at": payload.get("calculated_at"),
+            }
+        except Exception:
+            return {"scores_by_ip": {}, "selected_ip": None, "calculated_at": None}
+
     def get_telemetry_snapshot(self, weights: Optional[Dict[str, float]] = None) -> Dict[str, Any]:
         """Produce full live telemetry matching the Stitch dashboard specification."""
         if weights is None:
@@ -263,6 +290,11 @@ class TelemetryAggregator:
         pod_metrics = self.get_pod_metrics()
         gw_status = self.get_gateway_runtime_status()
         is_gw = gw_status["is_active"]
+        gateway_adaptive_decision = (
+            self.get_gateway_adaptive_decision()
+            if routing_config.get_strategy() == STRATEGY_ADAPTIVE
+            else {"scores_by_ip": {}, "selected_ip": None, "calculated_at": None}
+        )
 
         with ThreadPoolExecutor(max_workers=max(3, len(replica_ips))) as executor:
             raw_stats = list(executor.map(self.fetch_replica_stats, replica_ips))
@@ -346,6 +378,7 @@ class TelemetryAggregator:
                 "index": idx + 1,
                 "name": meta["name"],
                 "replica_id": rep_id,
+                "endpoint_ip": stat.get("endpoint_ip"),
                 "color": meta["color"],
                 "badge_class": meta["badge_class"],
 
@@ -371,6 +404,9 @@ class TelemetryAggregator:
                 "metrics_available": metrics_available,
                 "traffic_share_pct": 0.0, # calculated below
                 "score": 0.0, # calculated below (benchmark preview)
+                "gateway_score": gateway_adaptive_decision["scores_by_ip"].get(stat.get("endpoint_ip")),
+                "gateway_selected": stat.get("endpoint_ip") == gateway_adaptive_decision["selected_ip"],
+                "gateway_score_at": gateway_adaptive_decision["calculated_at"],
                 "is_optimal": False
             })
 

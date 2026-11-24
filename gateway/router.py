@@ -57,6 +57,9 @@ class RoundRobinRouter:
         self._weights = _load_weights()
         self._wrr_current: List[int] = []
         self._adaptive_index = 0
+        self._last_adaptive_scores: Dict[str, float] = {}
+        self._last_adaptive_selection: Optional[str] = None
+        self._last_adaptive_scores_at: Optional[float] = None
         self._observations: Dict[str, Dict[str, Any]] = {}
         self._adaptive_ema: Dict[str, Dict[str, float]] = {}
         self._cpu_pct: Dict[str, float] = {}
@@ -124,6 +127,12 @@ class RoundRobinRouter:
                 self._adaptive_ema = {
                     url: self._adaptive_ema.get(url, {}) for url in ready_urls
                 }
+                self._last_adaptive_scores = {
+                    url: score for url, score in self._last_adaptive_scores.items()
+                    if url in ready_urls
+                }
+                if self._last_adaptive_selection not in ready_urls:
+                    self._last_adaptive_selection = None
                 self._cpu_pct = {url: value for url, value in self._cpu_pct.items() if url in ready_urls}
                 self._cpu_sampled_at = {
                     url: value for url, value in self._cpu_sampled_at.items() if url in ready_urls
@@ -355,6 +364,15 @@ class RoundRobinRouter:
         with self._lock:
             return dict(self._adaptive_scores_locked())
 
+    def last_adaptive_decision(self) -> Dict[str, Any]:
+        """Return the exact scores and selected endpoint from the latest adaptive decision."""
+        with self._lock:
+            return {
+                "scores": dict(self._last_adaptive_scores),
+                "selected_endpoint": self._last_adaptive_selection,
+                "calculated_at": self._last_adaptive_scores_at,
+            }
+
     def next_endpoint(self, strategy: str = "round_robin", exclude: Optional[List[str]] = None) -> Optional[str]:
         """Select a ready endpoint by RR, WRR, or lowest healthy-replica penalty."""
         with self._lock:
@@ -374,6 +392,8 @@ class RoundRobinRouter:
                     self._wrr_current[index] -= total
                 elif strategy == "adaptive":
                     scores = self._adaptive_scores_locked()
+                    self._last_adaptive_scores = dict(scores)
+                    self._last_adaptive_scores_at = time.time()
                     candidates = [i for i, ip in enumerate(self._endpoints) if f"http://{ip}:{INFERENCE_PORT}" not in excluded]
                     if not candidates:
                         return None
@@ -387,6 +407,8 @@ class RoundRobinRouter:
                 ip = self._endpoints[index]
                 url = f"http://{ip}:{INFERENCE_PORT}"
                 if url not in excluded:
+                    if strategy == "adaptive":
+                        self._last_adaptive_selection = url
                     observation = self._observations.setdefault(url, self._new_observation())
                     observation["active"] = int(observation["active"]) + 1
                     return url

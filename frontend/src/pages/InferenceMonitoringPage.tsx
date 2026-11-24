@@ -924,7 +924,11 @@ export const InferenceMonitoringPage: React.FC = () => {
                       <th className="py-2.5 px-3">P95</th>
                       <th className="py-2.5 px-3">CPU</th>
                       <th className="py-2.5 px-3">Memory</th>
-                      <th className="py-2.5 px-3">SCORE (PREVIEW)</th>
+                      <th className="py-2.5 px-3" title="Score used by the gateway in its latest Adaptive decision. Lower is better.">
+                        <span className="block">GATEWAY SCORE</span>
+                        <span className="text-[9px] font-normal text-slate-400">latest decision · lower is better</span>
+                      </th>
+                      <th className="py-2.5 px-3">PREVIEW SCORE</th>
                       <th className="py-2.5 px-3 text-right">Action</th>
                     </tr>
                   </thead>
@@ -964,6 +968,17 @@ export const InferenceMonitoringPage: React.FC = () => {
                         </td>
                         <td className="py-2.5 px-3 text-slate-800">
                           {rep.mem_pct != null ? `${rep.mem_raw} (${rep.mem_pct.toFixed(0)}%)` : 'N/A'}
+                        </td>
+                        <td
+                          className="py-2.5 px-3 font-bold text-violet-700"
+                          title={rep.gateway_score_at ? `Latest Adaptive decision at ${new Date(rep.gateway_score_at * 1000).toLocaleTimeString()}` : 'No Adaptive decision has been recorded yet'}
+                        >
+                          {rep.gateway_score != null ? (
+                            <span className="inline-flex items-center gap-1.5">
+                              {rep.gateway_score.toFixed(3)}
+                              {rep.gateway_selected && <span className="rounded bg-violet-100 px-1 py-0.5 text-[9px]">LAST SELECTED</span>}
+                            </span>
+                          ) : '—'}
                         </td>
                         <td className="py-2.5 px-3 font-bold text-slate-800">
                           <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-700">
@@ -1504,6 +1519,13 @@ export const InferenceMonitoringPage: React.FC = () => {
                 <span className="text-slate-500">Memory RSS Usage (K8s Metrics Server)</span>
                 <span className="font-bold text-slate-900">
                   {selectedReplicaModal.mem_pct != null ? `${selectedReplicaModal.mem_raw} (${selectedReplicaModal.mem_pct.toFixed(1)}%)` : 'N/A'}
+                </span>
+              </div>
+              <div className="flex justify-between p-2 rounded bg-slate-50 border border-slate-100">
+                <span className="text-slate-500">Gateway Adaptive Score (latest decision)</span>
+                <span className="font-bold text-violet-700">
+                  {selectedReplicaModal.gateway_score != null ? selectedReplicaModal.gateway_score.toFixed(3) : 'No Adaptive decision yet'}
+                  {selectedReplicaModal.gateway_selected ? ' · LAST SELECTED' : ''}
                 </span>
               </div>
               <div className="flex justify-between p-2 rounded bg-slate-50 border border-slate-100">
