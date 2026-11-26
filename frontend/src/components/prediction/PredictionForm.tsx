@@ -1,5 +1,5 @@
-import React from 'react';
-import { BrainCircuit, Rocket, Activity, Play } from 'lucide-react';
+import React, { useMemo } from 'react';
+import { BrainCircuit, Rocket, Activity, Play, Loader2 } from 'lucide-react';
 import Card from '../common/Card';
 import Button from '../common/Button';
 import type { FeatureSchema } from '../../types/deployment';
@@ -26,12 +26,12 @@ export const PredictionForm: React.FC<PredictionFormProps> = ({
   onFeatureChange,
   onSubmit,
 }) => {
-  const resolvedFeatures: FeatureSchema[] = React.useMemo(() => {
+  const resolvedFeatures: FeatureSchema[] = useMemo(() => {
     if (featureList && featureList.length > 0) {
       return featureList;
     }
     if (featureNames && featureNames.length > 0) {
-      return featureNames.map(name => ({
+      return featureNames.map((name) => ({
         name,
         type: 'string',
         required: true,
@@ -43,16 +43,16 @@ export const PredictionForm: React.FC<PredictionFormProps> = ({
 
   return (
     <Card className="xl:col-span-2 overflow-hidden">
-      <div className="px-6 py-5 border-b border-slate-100">
+      <div className="px-6 py-5 border-b border-slate-100 dark:border-[#262626]">
         <div className="flex items-center gap-3">
-          <div className="p-2.5 rounded-xl bg-violet-50 text-violet-600">
-            <BrainCircuit size={22} />
+          <div className="p-2.5 rounded-xl bg-violet-50 dark:bg-violet-950/40 text-violet-600 dark:text-violet-400">
+            <BrainCircuit size={20} />
           </div>
 
           <div>
-            <h2 className="font-semibold text-slate-900">Model Input</h2>
-            <p className="text-sm text-slate-500">
-              Enter the feature values required by the deployed model.
+            <h2 className="font-bold text-slate-900 dark:text-white text-base">Model Input Features</h2>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+              Enter the input attributes required by the serving model schema.
             </p>
           </div>
         </div>
@@ -61,38 +61,37 @@ export const PredictionForm: React.FC<PredictionFormProps> = ({
       <form onSubmit={onSubmit} className="p-6">
         {!selectedDeploy ? (
           <div className="py-12 text-center">
-            <div className="mx-auto w-16 h-16 rounded-2xl bg-slate-100 flex items-center justify-center text-slate-400">
-              <Rocket size={30} />
+            <div className="mx-auto w-14 h-14 rounded-2xl bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-slate-400">
+              <Rocket size={26} />
             </div>
 
-            <h3 className="mt-5 text-lg font-semibold text-slate-800">
-              Select a deployment
+            <h3 className="mt-4 text-base font-bold text-slate-800 dark:text-slate-200">
+              Select an endpoint
             </h3>
 
-            <p className="mt-2 text-sm text-slate-500 max-w-md mx-auto">
-              Choose a deployed model above to load its input schema.
+            <p className="mt-1.5 text-xs text-slate-500 dark:text-slate-400 max-w-sm mx-auto">
+              Choose an active model deployment above to load its input feature schema.
             </p>
           </div>
         ) : loadingSchema ? (
-          <div className="py-12 text-center">
-            <div className="mx-auto w-12 h-12 rounded-full border-4 border-slate-200 border-t-blue-600 animate-spin" />
-
-            <p className="mt-4 text-sm text-slate-500">
-              Loading model schema...
+          <div className="py-12 flex flex-col items-center justify-center text-center">
+            <Loader2 size={32} className="text-indigo-600 animate-spin" />
+            <p className="mt-3 text-xs font-semibold text-slate-600 dark:text-slate-400">
+              Inspecting model signature & feature schema...
             </p>
           </div>
         ) : resolvedFeatures.length === 0 ? (
           <div className="py-12 text-center">
-            <div className="mx-auto w-16 h-16 rounded-2xl bg-amber-50 flex items-center justify-center text-amber-500">
-              <Activity size={30} />
+            <div className="mx-auto w-14 h-14 rounded-2xl bg-amber-50 dark:bg-amber-950/40 flex items-center justify-center text-amber-500">
+              <Activity size={26} />
             </div>
 
-            <h3 className="mt-5 text-lg font-semibold text-slate-800">
-              No input features found
+            <h3 className="mt-4 text-base font-bold text-slate-800 dark:text-slate-200">
+              No input features discovered
             </h3>
 
-            <p className="mt-2 text-sm text-slate-500 max-w-md mx-auto">
-              The selected deployment did not return a usable input schema.
+            <p className="mt-1.5 text-xs text-slate-500 dark:text-slate-400 max-w-sm mx-auto">
+              The selected deployment did not expose structured input column metadata.
             </p>
           </div>
         ) : (
@@ -114,7 +113,7 @@ export const PredictionForm: React.FC<PredictionFormProps> = ({
 
                 return (
                   <div key={feature.name}>
-                    <label className="block text-sm font-medium text-slate-700 mb-2">
+                    <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700 dark:text-slate-300 mb-2">
                       {formatLabel(feature.name)}{' '}
                       {feature.required && <span className="text-red-500">*</span>}
                     </label>
@@ -122,9 +121,9 @@ export const PredictionForm: React.FC<PredictionFormProps> = ({
                     {isCategorical ? (
                       <select
                         value={features[feature.name] ?? ''}
-                        onChange={e => onFeatureChange(feature.name, e.target.value)}
+                        onChange={(e) => onFeatureChange(feature.name, e.target.value)}
                         required={feature.required}
-                        className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-700 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 transition"
+                        className="w-full rounded-xl border border-slate-200 dark:border-[#262626] bg-white dark:bg-[#151515] px-3.5 py-2.5 text-xs text-slate-800 dark:text-slate-100 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/15 transition-all"
                       >
                         <option value="">-- Select {formatLabel(feature.name)} --</option>
                         {feature.options!.map((opt: any) => (
@@ -136,9 +135,9 @@ export const PredictionForm: React.FC<PredictionFormProps> = ({
                     ) : isBoolean ? (
                       <select
                         value={features[feature.name] ?? ''}
-                        onChange={e => onFeatureChange(feature.name, e.target.value)}
+                        onChange={(e) => onFeatureChange(feature.name, e.target.value)}
                         required={feature.required}
-                        className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-700 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 transition"
+                        className="w-full rounded-xl border border-slate-200 dark:border-[#262626] bg-white dark:bg-[#151515] px-3.5 py-2.5 text-xs text-slate-800 dark:text-slate-100 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/15 transition-all"
                       >
                         <option value="">-- Select --</option>
                         <option value="true">True</option>
@@ -149,11 +148,11 @@ export const PredictionForm: React.FC<PredictionFormProps> = ({
                         type={isNumber ? 'number' : 'text'}
                         step={isNumber ? 'any' : undefined}
                         value={features[feature.name] ?? ''}
-                        onChange={e => onFeatureChange(feature.name, e.target.value)}
-                        onWheel={isNumber ? e => e.currentTarget.blur() : undefined}
+                        onChange={(e) => onFeatureChange(feature.name, e.target.value)}
+                        onWheel={isNumber ? (e) => e.currentTarget.blur() : undefined}
                         placeholder={`Enter ${formatLabel(feature.name)}`}
                         required={feature.required}
-                        className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-700 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 transition"
+                        className="w-full rounded-xl border border-slate-200 dark:border-[#262626] bg-white dark:bg-[#151515] px-3.5 py-2.5 text-xs text-slate-800 dark:text-slate-100 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/15 transition-all"
                       />
                     )}
                   </div>
@@ -161,17 +160,20 @@ export const PredictionForm: React.FC<PredictionFormProps> = ({
               })}
             </div>
 
-            <div className="mt-6 rounded-xl border border-slate-100 bg-slate-50 p-4">
-              <p className="text-xs text-slate-500">Input features detected</p>
-              <p className="text-lg font-semibold text-slate-800 mt-1">
-                {resolvedFeatures.length}
-              </p>
+            <div className="mt-6 flex items-center justify-between p-3.5 rounded-xl border border-slate-100 dark:border-[#262626] bg-slate-50/70 dark:bg-[#1a1a1a]">
+              <span className="text-xs text-slate-500 dark:text-slate-400">Features required</span>
+              <span className="font-mono font-bold text-xs text-indigo-600 dark:text-indigo-400">
+                {resolvedFeatures.length} attributes detected
+              </span>
             </div>
 
             <div className="flex justify-end mt-6">
-              <Button type="submit" disabled={predicting}>
-                <Play size={18} className="mr-2" />
-                {predicting ? 'Running Prediction...' : 'Run Prediction'}
+              <Button
+                type="submit"
+                loading={predicting}
+                icon={<Play size={14} className="fill-current shrink-0" />}
+              >
+                {predicting ? 'Executing Inference...' : 'Run Prediction'}
               </Button>
             </div>
           </>

@@ -28,6 +28,9 @@ export interface ReplicaTelemetry {
   metrics_available?: boolean;
   traffic_share_pct: number;
   score: number;
+  gateway_score: number | null;
+  gateway_selected: boolean;
+  gateway_score_at: number | null;
   is_optimal: boolean;
 }
 

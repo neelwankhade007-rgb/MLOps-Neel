@@ -1,35 +1,43 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import toast from 'react-hot-toast';
 import { deploymentApi } from '../api/deploymentApi';
 import type { Deployment, FeatureSchema } from '../types/deployment';
 import type { PredictionHistoryItem } from '../types/prediction';
 import { formatLabel } from '../utils/formatters';
+import { sanitizeErrorMessage } from '../utils/error';
+
+const FORBIDDEN_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 
 export const extractFeatureSchemas = (schemaData: any): FeatureSchema[] => {
   if (!schemaData) return [];
+
+  const sanitizeOptions = (options: any): any[] => {
+    return Array.isArray(options) ? options.filter((o) => typeof o === 'string' || typeof o === 'number') : [];
+  };
+
+  const sanitizeName = (rawName: any): string => {
+    const str = String(rawName || '').trim();
+    return FORBIDDEN_KEYS.has(str) ? '' : str;
+  };
 
   if (Array.isArray(schemaData.features)) {
     return schemaData.features
       .map((item: any): FeatureSchema => {
         if (typeof item === 'object' && item !== null) {
-          const rawOptions = Array.isArray(item.options) ? item.options : [];
+          const rawOptions = sanitizeOptions(item.options);
           let inferredType = item.type;
           if (!inferredType) {
-            if (rawOptions.length > 0) {
-              inferredType = 'categorical';
-            } else {
-              inferredType = 'string';
-            }
+            inferredType = rawOptions.length > 0 ? 'categorical' : 'string';
           }
           return {
-            name: item.name || '',
+            name: sanitizeName(item.name),
             type: inferredType,
             required: item.required ?? true,
             options: rawOptions,
           };
         }
         return {
-          name: String(item),
+          name: sanitizeName(item),
           type: 'string',
           required: true,
           options: [],
@@ -42,24 +50,20 @@ export const extractFeatureSchemas = (schemaData: any): FeatureSchema[] => {
     return schemaData
       .map((item: any): FeatureSchema => {
         if (typeof item === 'object' && item !== null) {
-          const rawOptions = Array.isArray(item.options) ? item.options : [];
+          const rawOptions = sanitizeOptions(item.options);
           let inferredType = item.type;
           if (!inferredType) {
-            if (rawOptions.length > 0) {
-              inferredType = 'categorical';
-            } else {
-              inferredType = 'string';
-            }
+            inferredType = rawOptions.length > 0 ? 'categorical' : 'string';
           }
           return {
-            name: item.name || '',
+            name: sanitizeName(item.name),
             type: inferredType,
             required: item.required ?? true,
             options: rawOptions,
           };
         }
         return {
-          name: String(item),
+          name: sanitizeName(item),
           type: 'string',
           required: true,
           options: [],
@@ -72,16 +76,16 @@ export const extractFeatureSchemas = (schemaData: any): FeatureSchema[] => {
     return schemaData.columns
       .map((item: any): FeatureSchema => {
         if (typeof item === 'object' && item !== null) {
-          const rawOptions = Array.isArray(item.options) ? item.options : [];
+          const rawOptions = sanitizeOptions(item.options);
           return {
-            name: item.name || '',
+            name: sanitizeName(item.name),
             type: item.type || (rawOptions.length > 0 ? 'categorical' : 'string'),
             required: item.required ?? true,
             options: rawOptions,
           };
         }
         return {
-          name: String(item),
+          name: sanitizeName(item),
           type: 'string',
           required: true,
           options: [],
@@ -91,19 +95,21 @@ export const extractFeatureSchemas = (schemaData: any): FeatureSchema[] => {
   }
 
   if (schemaData.properties && typeof schemaData.properties === 'object') {
-    return Object.entries(schemaData.properties).map(
-      ([name, prop]: [string, any]): FeatureSchema => ({
-        name,
-        type:
-          prop?.type === 'number' || prop?.type === 'integer'
-            ? 'number'
-            : Array.isArray(prop?.enum) && prop.enum.length > 0
-            ? 'categorical'
-            : prop?.type || 'string',
-        required: true,
-        options: Array.isArray(prop?.enum) ? prop.enum : [],
-      })
-    );
+    return Object.entries(schemaData.properties)
+      .filter(([name]) => !FORBIDDEN_KEYS.has(name))
+      .map(
+        ([name, prop]: [string, any]): FeatureSchema => ({
+          name,
+          type:
+            prop?.type === 'number' || prop?.type === 'integer'
+              ? 'number'
+              : Array.isArray(prop?.enum) && prop.enum.length > 0
+              ? 'categorical'
+              : prop?.type || 'string',
+          required: true,
+          options: sanitizeOptions(prop?.enum),
+        })
+      );
   }
 
   if (schemaData && typeof schemaData === 'object') {
@@ -115,8 +121,8 @@ export const extractFeatureSchemas = (schemaData: any): FeatureSchema[] => {
       'target_column',
       'encoded_columns',
     ];
-    const nonMeta = rawKeys.filter(k => !metaKeys.includes(k));
-    const targetKeys = nonMeta.length > 0 ? nonMeta : rawKeys;
+    const nonMeta = rawKeys.filter((k) => !metaKeys.includes(k) && !FORBIDDEN_KEYS.has(k));
+    const targetKeys = nonMeta.length > 0 ? nonMeta : rawKeys.filter((k) => !FORBIDDEN_KEYS.has(k));
     return targetKeys.map(
       (key): FeatureSchema => ({
         name: key,
@@ -151,8 +157,8 @@ export const usePrediction = () => {
       if (data.length > 0 && !selectedDeploy) {
         setSelectedDeploy(data[0].name || data[0].deployment_name || '');
       }
-    } catch {
-      toast.error('Failed to load deployments');
+    } catch (err) {
+      toast.error(sanitizeErrorMessage(err, 'Failed to load deployments'));
     } finally {
       setLoadingDeployments(false);
     }
@@ -162,13 +168,13 @@ export const usePrediction = () => {
     loadDeployments();
   }, [loadDeployments]);
 
-  const getFeatureSchemas = useCallback((): FeatureSchema[] => {
+  const featureList = useMemo((): FeatureSchema[] => {
     return extractFeatureSchemas(schema);
   }, [schema]);
 
-  const getFeatureNames = useCallback((): string[] => {
-    return getFeatureSchemas().map(f => f.name);
-  }, [getFeatureSchemas]);
+  const featureNames = useMemo((): string[] => {
+    return featureList.map((f) => f.name);
+  }, [featureList]);
 
   useEffect(() => {
     if (!selectedDeploy) {
@@ -178,37 +184,47 @@ export const usePrediction = () => {
       return;
     }
 
-    const loadSchema = async () => {
-      setLoadingSchema(true);
-      setPrediction(null);
+    let isCurrent = true;
+    setLoadingSchema(true);
+    setPrediction(null);
 
-      try {
-        const schemaData = await deploymentApi.getDeploymentSchema(selectedDeploy);
+    deploymentApi
+      .getDeploymentSchema(selectedDeploy)
+      .then((schemaData) => {
+        if (!isCurrent) return;
         setSchema(schemaData);
 
-        const extractedSchemas = extractFeatureSchemas(schemaData);
+        const extracted = extractFeatureSchemas(schemaData);
         const initialFeatures: Record<string, any> = {};
-        extractedSchemas.forEach(feature => {
-          initialFeatures[feature.name] = '';
+        extracted.forEach((feature) => {
+          if (!FORBIDDEN_KEYS.has(feature.name)) {
+            initialFeatures[feature.name] = '';
+          }
         });
-
         setFeatures(initialFeatures);
-      } catch {
-        toast.error('Failed to load model input schema');
+      })
+      .catch((err) => {
+        if (!isCurrent) return;
+        toast.error(sanitizeErrorMessage(err, 'Failed to load model schema'));
         setSchema(null);
         setFeatures({});
-      } finally {
-        setLoadingSchema(false);
-      }
-    };
+      })
+      .finally(() => {
+        if (isCurrent) setLoadingSchema(false);
+      });
 
-    loadSchema();
+    return () => {
+      isCurrent = false;
+    };
   }, [selectedDeploy]);
 
   const handleFeatureChange = (feature: string, value: string) => {
-    setFeatures(prev => ({
+    const key = String(feature).trim();
+    if (FORBIDDEN_KEYS.has(key)) return;
+
+    setFeatures((prev) => ({
       ...prev,
-      [feature]: value,
+      [key]: value,
     }));
   };
 
@@ -216,17 +232,16 @@ export const usePrediction = () => {
     if (e) e.preventDefault();
 
     if (!selectedDeploy) {
-      toast.error('Please select a deployment');
+      toast.error('Please select an active deployment');
       return false;
     }
 
-    const featureSchemas = getFeatureSchemas();
-    if (featureSchemas.length === 0) {
-      toast.error('No model input features available');
+    if (featureList.length === 0) {
+      toast.error('No input features discovered for this model');
       return false;
     }
 
-    const missingFeature = featureSchemas.find(
+    const missingFeature = featureList.find(
       (feature: FeatureSchema) =>
         feature.required &&
         (features[feature.name] === undefined ||
@@ -242,7 +257,8 @@ export const usePrediction = () => {
 
     try {
       const payload: Record<string, any> = {};
-      featureSchemas.forEach((feature: FeatureSchema) => {
+      featureList.forEach((feature: FeatureSchema) => {
+        if (FORBIDDEN_KEYS.has(feature.name)) return;
         const val = features[feature.name];
         if (val !== undefined && val !== null && String(val).trim() !== '') {
           const trimmed = String(val).trim();
@@ -258,23 +274,11 @@ export const usePrediction = () => {
             const num = Number(trimmed);
             payload[feature.name] = !Number.isNaN(num) ? num : trimmed;
           } else if (normalizedType === 'boolean' || normalizedType === 'bool') {
-            if (trimmed.toLowerCase() === 'true') {
-              payload[feature.name] = true;
-            } else if (trimmed.toLowerCase() === 'false') {
-              payload[feature.name] = false;
-            } else {
-              payload[feature.name] = trimmed;
-            }
-          } else if (normalizedType === 'categorical') {
-            payload[feature.name] = val;
+            payload[feature.name] = trimmed.toLowerCase() === 'true';
           } else {
             const num = Number(trimmed);
             if (!Number.isNaN(num) && (!feature.options || feature.options.length === 0)) {
               payload[feature.name] = num;
-            } else if (trimmed.toLowerCase() === 'true') {
-              payload[feature.name] = true;
-            } else if (trimmed.toLowerCase() === 'false') {
-              payload[feature.name] = false;
             } else {
               payload[feature.name] = trimmed;
             }
@@ -303,11 +307,11 @@ export const usePrediction = () => {
         time: new Date().toLocaleTimeString(),
       };
 
-      setPredictionHistory(prev => [historyItem, ...prev].slice(0, 10));
-      toast.success('Prediction completed');
+      setPredictionHistory((prev) => [historyItem, ...prev].slice(0, 15));
+      toast.success('Prediction generated successfully');
       return true;
-    } catch {
-      toast.error('Prediction failed');
+    } catch (err) {
+      toast.error(sanitizeErrorMessage(err, 'Prediction failed. Check input data.'));
       setPrediction(null);
       return false;
     } finally {
@@ -316,7 +320,7 @@ export const usePrediction = () => {
   };
 
   const selectedDeployment = deployments.find(
-    deployment =>
+    (deployment) =>
       (deployment.name || deployment.deployment_name) === selectedDeploy
   );
 
@@ -332,8 +336,8 @@ export const usePrediction = () => {
     loadingDeployments,
     loadingSchema,
     predicting,
-    featureList: getFeatureSchemas(),
-    featureNames: getFeatureNames(),
+    featureList,
+    featureNames,
     handleFeatureChange,
     runPrediction,
     clearHistory: () => {

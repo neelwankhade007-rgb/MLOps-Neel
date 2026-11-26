@@ -21,7 +21,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from main import app, router, MODEL_RUN_ID
-from router import RoundRobinRouter
+from router import ADAPTIVE_METRIC_MAX_AGE_S, RoundRobinRouter
 
 
 # ---------------------------------------------------------------------------
@@ -82,6 +82,10 @@ class TestRoundRobinRouter:
         scores = r.adaptive_scores()
         assert scores[second] < scores[first]
         assert r.next_endpoint("adaptive") == second
+        decision = r.last_adaptive_decision()
+        assert decision["scores"][second] < decision["scores"][first]
+        assert decision["selected_endpoint"] == second
+        assert decision["calculated_at"] is not None
 
     def test_adaptive_uses_min_max_normalization_and_ema(self):
         r = RoundRobinRouter()
@@ -125,8 +129,9 @@ class TestRoundRobinRouter:
             r.refresh()
         for endpoint, latency in ((first, 1000.0), (second, 1.0)):
             r.record_result(endpoint, latency, 200)
-            r._observations[endpoint]["latency_at"] -= 120.0
-            r._observations[endpoint]["error_at"] -= 120.0
+            # Ensure the sample is beyond the freshness boundary despite clock precision.
+            r._observations[endpoint]["latency_at"] -= ADAPTIVE_METRIC_MAX_AGE_S + 1.0
+            r._observations[endpoint]["error_at"] -= ADAPTIVE_METRIC_MAX_AGE_S + 1.0
 
         scores = r.adaptive_scores()
         assert scores[first] == pytest.approx(scores[second])
@@ -296,6 +301,17 @@ class TestGatewayServiceEndpoints:
             data = resp.json()
             assert data["count"] == 2
             assert data["endpoints"] == ["10.0.0.1", "10.0.0.2"]
+
+    def test_adaptive_scores_endpoint_reports_latest_decision(self, client):
+        decision = {
+            "scores": {"http://10.0.0.1:8000": 0.0, "http://10.0.0.2:8000": 1.0},
+            "selected_endpoint": "http://10.0.0.1:8000",
+            "calculated_at": 1234567890.0,
+        }
+        with patch.object(router, "last_adaptive_decision", return_value=decision):
+            resp = client.get("/adaptive-scores")
+        assert resp.status_code == 200
+        assert resp.json() == decision
 
     def test_predict_round_robin_forwarding(self, client):
         """Verify that /predict rotates upstream requests across endpoints."""

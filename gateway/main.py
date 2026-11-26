@@ -190,6 +190,17 @@ def list_replicas():
     }
 
 
+@app.get("/adaptive-scores")
+def adaptive_scores():
+    """Expose the scores and choice from the latest adaptive routing decision."""
+    decision = router.last_adaptive_decision()
+    return {
+        "scores": decision["scores"],
+        "selected_endpoint": decision["selected_endpoint"],
+        "calculated_at": decision["calculated_at"],
+    }
+
+
 # -- weights and configuration --------------------------------------------
 
 from pydantic import BaseModel
