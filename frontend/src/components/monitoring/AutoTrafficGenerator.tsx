@@ -111,7 +111,7 @@ export const AutoTrafficGenerator: React.FC<AutoTrafficGeneratorProps> = ({
       });
       setRunStatus(snapshot.status);
       setIsRunning(snapshot.status === 'running');
-      toast.success(`Locust started: ${users} users, up to ${targetRps} requests/sec for ${durationSec}s`);
+      toast.success(`Locust started: ${users} users, up to ${targetRps} req/s for ${durationSec}s`);
     } catch (err: any) {
       toast.error(err?.response?.data?.detail || 'Could not start the Locust run');
     }
@@ -138,62 +138,62 @@ export const AutoTrafficGenerator: React.FC<AutoTrafficGeneratorProps> = ({
   };
 
   return (
-    <div className="w-full rounded-2xl border border-slate-200/70 bg-white p-5 shadow-[0_10px_28px_rgba(15,23,42,0.04)] sm:p-6">
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pb-4 mb-5 border-b border-slate-100">
+    <div className="w-full rounded-2xl border border-slate-200/80 bg-white p-5 shadow-xs sm:p-6">
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pb-4 mb-5 border-b border-slate-100 dark:border-[#262626]">
         <div className="flex items-center gap-3">
           <div className={`p-2 rounded-xl border ${
             isRunning
               ? 'bg-emerald-50 text-emerald-600 border-emerald-200 animate-pulse'
-              : 'bg-blue-50 text-blue-600 border-blue-200'
+              : 'bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400 border-indigo-200 dark:border-indigo-900/50'
           }`}>
             <Activity size={20} />
           </div>
           <div>
-            <h3 className="text-base sm:text-lg font-bold text-slate-900 tracking-tight flex items-center gap-2">
+            <h3 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white tracking-tight flex items-center gap-2">
               Locust Load Generator
               <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-mono font-bold border ${
                 isRunning
                   ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
                   : isStopping
                   ? 'bg-amber-50 text-amber-700 border-amber-200'
-                  : 'bg-slate-100 text-slate-600 border-slate-200'
+                  : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border-slate-200 dark:border-[#262626]'
               }`}>
                 <span className={`w-1.5 h-1.5 rounded-full ${isRunning ? 'bg-emerald-500' : 'bg-slate-400'}`} />
                 {isRunning ? 'RUNNING' : isStopping ? 'STOPPING...' : runStatus.toUpperCase()}
               </span>
             </h3>
-            <p className="text-xs text-slate-500 mt-0.5">
-              Generate authenticated live inference requests through the selected routing strategy.
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+              Generate authenticated live inference requests through the active cluster routing layer.
             </p>
           </div>
         </div>
 
         {/* Start / Stop Action Buttons */}
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2.5 shrink-0">
           {!isRunning ? (
             <button
               onClick={handleStart}
               disabled={!deploymentName || deployments.length === 0}
-              className="py-2.5 px-5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs flex items-center gap-2 shadow-sm shadow-emerald-600/20 transition-all hover:scale-[1.02] active:scale-[0.98]"
+              className="py-2 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-semibold text-xs inline-flex items-center gap-2 shadow-xs transition-all active:scale-[0.96] disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
             >
-              <Play size={15} fill="currentColor" />
-              <span>Start Locust</span>
+              <Play size={13} fill="currentColor" className="shrink-0" />
+              <span className="whitespace-nowrap">Start Locust Traffic</span>
             </button>
           ) : (
             <button
               onClick={() => handleStop()}
               disabled={isStopping}
-              className="py-2.5 px-5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-semibold text-xs flex items-center gap-2 shadow-sm shadow-rose-600/20 transition-all hover:scale-[1.02] active:scale-[0.98]"
+              className="py-2 px-4 rounded-xl bg-rose-600 hover:bg-rose-700 active:bg-rose-800 text-white font-semibold text-xs inline-flex items-center gap-2 shadow-xs transition-all active:scale-[0.96] cursor-pointer"
             >
-              <Square size={14} fill="currentColor" />
-              <span>{isStopping ? 'Stopping...' : 'Stop Locust'}</span>
+              <Square size={13} fill="currentColor" className="shrink-0" />
+              <span className="whitespace-nowrap">{isStopping ? 'Stopping...' : 'Stop Traffic'}</span>
             </button>
           )}
 
           <button
             onClick={handleResetStats}
             disabled={isRunning}
-            className="py-2.5 px-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-medium transition-colors disabled:opacity-50"
+            className="py-2 px-3 rounded-xl bg-slate-100 dark:bg-neutral-800 hover:bg-slate-200 dark:hover:bg-neutral-700 text-slate-700 dark:text-neutral-300 text-xs font-medium border border-slate-200/80 dark:border-neutral-700 transition-all active:scale-[0.96] disabled:opacity-50 cursor-pointer"
             title="Reset generator counters"
           >
             Reset
@@ -203,103 +203,156 @@ export const AutoTrafficGenerator: React.FC<AutoTrafficGeneratorProps> = ({
 
       {/* Locust run configuration */}
       <div className="mb-5 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
-        <div className="rounded-xl border border-slate-200/70 bg-slate-50/60 p-3.5">
-          <label className="text-xs font-bold text-slate-800 flex items-center gap-1.5 mb-2">
-            <ShieldCheck size={14} className="text-blue-600" /> Deployment
+        <div className="rounded-xl border border-slate-200/70 dark:border-[#262626] bg-slate-50/60 dark:bg-[#1a1a1a] p-3.5">
+          <label className="text-xs font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5 mb-2">
+            <ShieldCheck size={14} className="text-indigo-600" /> Target Deployment
           </label>
-          <select value={deploymentName} disabled={isRunning} onChange={(e) => setDeploymentName(e.target.value)} className="w-full rounded-lg border border-slate-200 bg-white p-2 text-xs text-slate-800 disabled:opacity-50">
+          <select
+            value={deploymentName}
+            disabled={isRunning}
+            onChange={(e) => setDeploymentName(e.target.value)}
+            className="w-full rounded-lg border border-slate-200 dark:border-[#333] bg-white dark:bg-[#151515] p-2 text-xs text-slate-800 dark:text-slate-100 disabled:opacity-50"
+          >
             {deployments.length === 0 && <option value="">No active deployment</option>}
-            {deployments.map((deployment) => <option key={deployment.name} value={deployment.name}>{deployment.name}</option>)}
+            {deployments.map((deployment) => (
+              <option key={deployment.name} value={deployment.name}>
+                {deployment.name}
+              </option>
+            ))}
           </select>
         </div>
 
-        <div className="rounded-xl border border-slate-200/70 bg-slate-50/60 p-3.5">
-          <label className="text-xs font-bold text-slate-800 flex items-center gap-1.5 mb-2"><Activity size={14} className="text-blue-600" />Concurrent users</label>
-          <input type="number" min="1" max="50" step="1" value={users} disabled={isRunning} onChange={(e) => setUsers(Math.max(1, Math.min(50, Number(e.target.value))))} className="w-full rounded-lg border border-slate-200 bg-white p-2 font-mono text-sm disabled:opacity-50" />
-          <span className="text-[10px] text-slate-500 mt-1 block">Locust users sending requests concurrently (1–50).</span>
+        <div className="rounded-xl border border-slate-200/70 dark:border-[#262626] bg-slate-50/60 dark:bg-[#1a1a1a] p-3.5">
+          <label className="text-xs font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5 mb-2">
+            <Activity size={14} className="text-indigo-600" /> Concurrent Users
+          </label>
+          <input
+            type="number"
+            min="1"
+            max="50"
+            step="1"
+            value={users}
+            disabled={isRunning}
+            onChange={(e) => setUsers(Math.max(1, Math.min(50, Number(e.target.value))))}
+            className="w-full rounded-lg border border-slate-200 dark:border-[#333] bg-white dark:bg-[#151515] p-2 font-mono text-xs text-slate-800 dark:text-slate-100 disabled:opacity-50"
+          />
+          <span className="text-[10px] text-slate-400 mt-1 block">Parallel client workers (1–50)</span>
         </div>
 
-        <div className="rounded-xl border border-slate-200/70 bg-slate-50/60 p-3.5">
-          <label className="text-xs font-bold text-slate-800 flex items-center gap-1.5 mb-2"><Zap size={14} className="text-blue-600" />Target request rate</label>
-          <input type="number" min="0.1" max="50" step="0.5" value={targetRps} disabled={isRunning} onChange={(e) => setTargetRps(Math.max(0.1, Math.min(50, Number(e.target.value))))} className="w-full rounded-lg border border-slate-200 bg-white p-2 font-mono text-sm disabled:opacity-50" />
-          <span className="text-[10px] text-slate-500 mt-1 block">Aggregate ceiling across all users (req/s).</span>
+        <div className="rounded-xl border border-slate-200/70 dark:border-[#262626] bg-slate-50/60 dark:bg-[#1a1a1a] p-3.5">
+          <label className="text-xs font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5 mb-2">
+            <Zap size={14} className="text-indigo-600" /> Target Rate
+          </label>
+          <input
+            type="number"
+            min="0.1"
+            max="50"
+            step="0.5"
+            value={targetRps}
+            disabled={isRunning}
+            onChange={(e) => setTargetRps(Math.max(0.1, Math.min(50, Number(e.target.value))))}
+            className="w-full rounded-lg border border-slate-200 dark:border-[#333] bg-white dark:bg-[#151515] p-2 font-mono text-xs text-slate-800 dark:text-slate-100 disabled:opacity-50"
+          />
+          <span className="text-[10px] text-slate-400 mt-1 block">Maximum aggregate rate (req/s)</span>
         </div>
 
-        <div className="rounded-xl border border-slate-200/70 bg-slate-50/60 p-3.5">
-          <label className="text-xs font-bold text-slate-800 flex items-center gap-1.5 mb-2"><Clock size={14} className="text-blue-600" />Duration</label>
-          <input type="number" min="1" max="300" step="1" value={durationSec} disabled={isRunning} onChange={(e) => setDurationSec(Math.max(1, Math.min(300, Number(e.target.value))))} className="w-full rounded-lg border border-slate-200 bg-white p-2 font-mono text-sm disabled:opacity-50" />
-          <span className="text-[10px] text-slate-500 mt-1 block">Maximum run time in seconds (1–300).</span>
+        <div className="rounded-xl border border-slate-200/70 dark:border-[#262626] bg-slate-50/60 dark:bg-[#1a1a1a] p-3.5">
+          <label className="text-xs font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5 mb-2">
+            <Clock size={14} className="text-indigo-600" /> Duration
+          </label>
+          <input
+            type="number"
+            min="1"
+            max="300"
+            step="1"
+            value={durationSec}
+            disabled={isRunning}
+            onChange={(e) => setDurationSec(Math.max(1, Math.min(300, Number(e.target.value))))}
+            className="w-full rounded-lg border border-slate-200 dark:border-[#333] bg-white dark:bg-[#151515] p-2 font-mono text-xs text-slate-800 dark:text-slate-100 disabled:opacity-50"
+          />
+          <span className="text-[10px] text-slate-400 mt-1 block">Run window in seconds (1–300)</span>
         </div>
 
-        <div className="rounded-xl border border-slate-200/70 bg-slate-50/60 p-3.5">
-          <label className="text-xs font-bold text-slate-800 flex items-center gap-1.5 mb-2"><Sliders size={14} className="text-blue-600" />Request limit</label>
-          <input type="number" min="1" max="10000" step="1" value={requestCap} disabled={isRunning} onChange={(e) => setRequestCap(Math.max(1, Math.min(10000, Number(e.target.value))))} className="w-full rounded-lg border border-slate-200 bg-white p-2 font-mono text-sm disabled:opacity-50" />
-          <span className="text-[10px] text-slate-500 mt-1 block">Hard cap; the run stops at this count or duration.</span>
+        <div className="rounded-xl border border-slate-200/70 dark:border-[#262626] bg-slate-50/60 dark:bg-[#1a1a1a] p-3.5">
+          <label className="text-xs font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5 mb-2">
+            <Sliders size={14} className="text-indigo-600" /> Request Cap
+          </label>
+          <input
+            type="number"
+            min="1"
+            max="10000"
+            step="1"
+            value={requestCap}
+            disabled={isRunning}
+            onChange={(e) => setRequestCap(Math.max(1, Math.min(10000, Number(e.target.value))))}
+            className="w-full rounded-lg border border-slate-200 dark:border-[#333] bg-white dark:bg-[#151515] p-2 font-mono text-xs text-slate-800 dark:text-slate-100 disabled:opacity-50"
+          />
+          <span className="text-[10px] text-slate-400 mt-1 block">Maximum total queries allowed</span>
         </div>
 
         {/* Active policy echo */}
-        <div className="flex flex-col justify-between rounded-xl border border-slate-200/70 bg-slate-50/60 p-3.5">
+        <div className="flex flex-col justify-between rounded-xl border border-slate-200/70 dark:border-[#262626] bg-slate-50/60 dark:bg-[#1a1a1a] p-3.5">
           <div>
-            <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5 mb-1">
-              <ShieldCheck size={14} className={isGatewayActive ? "text-emerald-600" : "text-blue-600"} />
+            <span className="text-xs font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5 mb-1">
+              <ShieldCheck size={14} className={isGatewayActive ? "text-emerald-600" : "text-indigo-600"} />
               Selected Strategy
             </span>
-            <span className="font-mono text-xs font-bold text-slate-900 block truncate">
+            <span className="font-mono text-xs font-bold text-slate-900 dark:text-white block truncate">
               {activeStrategyTitle}
             </span>
           </div>
-          <span className="text-[10px] text-slate-500 block mt-1">
+          <span className="text-[10px] text-slate-400 block mt-1">
             {isGatewayActive
-              ? 'Prediction requests pass through the selected L7 gateway strategy.'
-              : 'Prediction requests pass through the backend to the native inference Service.'}
+              ? 'Requests are routed through the custom L7 gateway proxy.'
+              : 'Requests are routed via native Kubernetes ClusterIP service.'}
           </span>
         </div>
       </div>
 
       {/* Live Generator Metrics Cards */}
-      <div className="grid grid-cols-2 gap-3 border-t border-slate-100 pt-4 sm:grid-cols-3 xl:grid-cols-5">
-        <div className="rounded-xl border border-slate-200/60 bg-slate-50/60 p-3">
+      <div className="grid grid-cols-2 gap-3 border-t border-slate-100 dark:border-[#262626] pt-4 sm:grid-cols-3 xl:grid-cols-5">
+        <div className="rounded-xl border border-slate-200/60 dark:border-[#262626] bg-slate-50/60 dark:bg-[#1a1a1a] p-3">
           <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">
             Completed Requests
           </span>
-          <span className="text-xl font-bold font-mono text-slate-900 mt-1 block">
+          <span className="text-xl font-bold font-mono text-slate-900 dark:text-white mt-1 block">
             {stats.sent}
           </span>
         </div>
 
-        <div className="rounded-xl border border-emerald-100 bg-emerald-50/55 p-3">
-          <span className="text-[10px] font-bold text-emerald-700 uppercase tracking-wider block">
+        <div className="rounded-xl border border-emerald-100 dark:border-emerald-900/40 bg-emerald-50/50 dark:bg-emerald-950/20 p-3">
+          <span className="text-[10px] font-bold text-emerald-700 dark:text-emerald-300 uppercase tracking-wider block">
             Succeeded (200)
           </span>
-          <span className="text-xl font-bold font-mono text-emerald-800 mt-1 block">
+          <span className="text-xl font-bold font-mono text-emerald-800 dark:text-emerald-200 mt-1 block">
             {stats.success}
           </span>
         </div>
 
-        <div className="rounded-xl border border-rose-100 bg-rose-50/55 p-3">
-          <span className="text-[10px] font-bold text-rose-700 uppercase tracking-wider block">
+        <div className="rounded-xl border border-rose-100 dark:border-rose-900/40 bg-rose-50/50 dark:bg-rose-950/20 p-3">
+          <span className="text-[10px] font-bold text-rose-700 dark:text-rose-300 uppercase tracking-wider block">
             Failed / Errors
           </span>
-          <span className="text-xl font-bold font-mono text-rose-800 mt-1 block">
+          <span className="text-xl font-bold font-mono text-rose-800 dark:text-rose-200 mt-1 block">
             {stats.failed}
           </span>
         </div>
 
-        <div className="rounded-xl border border-amber-100 bg-amber-50/55 p-3">
-          <span className="text-[10px] font-bold text-amber-700 uppercase tracking-wider block">
-            Active Locust Users
+        <div className="rounded-xl border border-amber-100 dark:border-amber-900/40 bg-amber-50/50 dark:bg-amber-950/20 p-3">
+          <span className="text-[10px] font-bold text-amber-700 dark:text-amber-300 uppercase tracking-wider block">
+            Active Workers
           </span>
-          <span className="text-xl font-bold font-mono text-amber-800 mt-1 block">
+          <span className="text-xl font-bold font-mono text-amber-800 dark:text-amber-200 mt-1 block">
             {isRunning ? users : 0}
           </span>
         </div>
 
-        <div className="rounded-xl border border-blue-100 bg-blue-50/55 p-3">
-          <span className="text-[10px] font-bold text-blue-700 uppercase tracking-wider block">
-            Observed Rate
+        <div className="rounded-xl border border-indigo-100 dark:border-indigo-900/40 bg-indigo-50/50 dark:bg-indigo-950/20 p-3">
+          <span className="text-[10px] font-bold text-indigo-700 dark:text-indigo-300 uppercase tracking-wider block">
+            Observed Throughput
           </span>
-          <span className="text-xl font-bold font-mono text-blue-800 mt-1 block">
-            {stats.rps} rps
+          <span className="text-xl font-bold font-mono text-indigo-800 dark:text-indigo-200 mt-1 block">
+            {stats.rps} req/s
           </span>
         </div>
       </div>

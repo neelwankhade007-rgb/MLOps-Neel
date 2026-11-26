@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Box, CheckCircle2, Plus } from 'lucide-react';
+import { Box, Plus } from 'lucide-react';
 import Card from '../common/Card';
 import Input from '../common/Input';
 import Button from '../common/Button';
@@ -22,8 +22,10 @@ export const ExperimentList: React.FC<ExperimentListProps> = ({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!modelName.trim() || !experimentId) return;
+
     const success = await onRegister({
-      name: modelName,
+      name: modelName.trim(),
       experiment_id: Number(experimentId),
     });
 
@@ -35,15 +37,15 @@ export const ExperimentList: React.FC<ExperimentListProps> = ({
 
   return (
     <Card className="overflow-hidden">
-      <div className="px-6 py-5 border-b border-slate-100">
+      <div className="px-6 py-5 border-b border-slate-100 dark:border-[#262626]">
         <div className="flex items-center gap-3">
-          <div className="p-2.5 rounded-xl bg-violet-50 text-violet-600">
-            <Box size={22} />
+          <div className="p-2.5 rounded-xl bg-violet-50 dark:bg-violet-950/40 text-violet-600 dark:text-violet-400">
+            <Box size={20} />
           </div>
           <div>
-            <h2 className="font-semibold text-slate-900">Register Model</h2>
-            <p className="text-sm text-slate-500">
-              Add a trained experiment result to the model registry.
+            <h2 className="font-bold text-slate-900 dark:text-white text-base">Register Model</h2>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+              Promote a verified training experiment into the versioned model registry.
             </p>
           </div>
         </div>
@@ -52,29 +54,29 @@ export const ExperimentList: React.FC<ExperimentListProps> = ({
       <form onSubmit={handleSubmit} className="p-6">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-2">
-              Model Name
+            <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700 dark:text-slate-300 mb-2">
+              Model Name <span className="text-red-500">*</span>
             </label>
             <Input
               value={modelName}
               onChange={(e: React.ChangeEvent<HTMLInputElement>) => setModelName(e.target.value)}
               required
-              placeholder="e.g. customer_churn_model"
+              placeholder="e.g. churn_classifier_v1"
             />
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-2">
-              Source Experiment
+            <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700 dark:text-slate-300 mb-2">
+              Source Experiment <span className="text-red-500">*</span>
             </label>
             <select
               value={experimentId}
-              onChange={e => setExperimentId(e.target.value)}
+              onChange={(e) => setExperimentId(e.target.value)}
               required
-              className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-700 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+              className="w-full rounded-xl border border-slate-200 dark:border-[#262626] bg-white dark:bg-[#151515] px-3.5 py-2.5 text-xs text-slate-800 dark:text-slate-100 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/15 transition-all"
             >
-              <option value="">Select experiment</option>
-              {experiments.map(experiment => {
+              <option value="">-- Select experiment --</option>
+              {experiments.map((experiment) => {
                 const metricInfo = getPrimaryMetric(experiment);
                 const metricLabel = !metricInfo.isUnavailable
                   ? ` • ${metricInfo.name}: ${metricInfo.value}`
@@ -96,24 +98,13 @@ export const ExperimentList: React.FC<ExperimentListProps> = ({
           </div>
         </div>
 
-        <div className="mt-5 rounded-xl border border-violet-100 bg-violet-50 p-4">
-          <div className="flex items-start gap-3">
-            <CheckCircle2 size={20} className="text-violet-600 mt-0.5" />
-            <div>
-              <p className="text-sm font-medium text-violet-900">
-                Model lifecycle
-              </p>
-              <p className="text-xs text-violet-700 mt-1">
-                A trained experiment can be registered as a model and then selected
-                for deployment.
-              </p>
-            </div>
-          </div>
-        </div>
-
         <div className="flex justify-end mt-6">
-          <Button type="submit" disabled={loading}>
-            <Plus size={18} className="mr-2" />
+          <Button
+            type="submit"
+            loading={loading}
+            disabled={!modelName.trim() || !experimentId || experiments.length === 0}
+          >
+            <Plus size={16} className="mr-1.5" />
             {loading ? 'Registering...' : 'Register Model'}
           </Button>
         </div>

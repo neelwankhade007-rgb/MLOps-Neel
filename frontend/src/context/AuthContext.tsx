@@ -28,7 +28,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const logout = useCallback((showMessage = true) => {
     clearAuth();
     if (showMessage) {
-      toast.error('Session expired. Please log in again.');
+      toast.error('Session expired or logged out. Please sign in.');
     }
     setAuth(false);
   }, []);
@@ -64,13 +64,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (storedSessionId) {
         try {
           const res = await authApi.getSession();
-          if (res.session_id !== storedSessionId) {
+          if (res?.session_id && res.session_id !== storedSessionId) {
             logout(true);
             setLoadingApp(false);
             return;
           }
         } catch {
-          // Ignore network errors here to preserve existing offline/reconnecting behavior
+          // Gracefully maintain offline resilience on network glitches
         }
       }
 
