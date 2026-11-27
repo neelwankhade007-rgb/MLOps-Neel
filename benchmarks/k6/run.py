@@ -132,6 +132,7 @@ def current_cluster(args):
     by_ip = {pod["ip"]: name for name, pod in identities.items()}
     return {
         "pods": identities, "model": model, "endpoints": endpoints,
+        "adaptive_policy": gateway_readiness.get("adaptive_policy"),
         "replicas": [by_ip[ip] for ip in sorted(advertised)],
         "weights": {"wrr_weights": weights["wrr_weights"], "adaptive_weights": weights["adaptive_weights"]},
     }
@@ -155,13 +156,15 @@ def generate_trials(args):
         conditions = [("capacity", "candidate", args.rate)]
     elif args.plan == "ramp":
         conditions = [("ramp", "scout", args.rates[0])]
+    elif args.plan == "burst":
+        conditions = [("burst", "burst", args.rates[0])]
     else:
         conditions = [("steady", level, rate) for level, rate in zip(("low", "moderate", "high"), args.rates)]
         if args.plan == "chapter5":
             conditions += [("burst", "burst", args.rates[0])]
-        if args.plan == "contention":
-            conditions = [("steady", "matched_control", args.rates[1]),
-                          ("contention", "contended", args.rates[1])]
+        if args.plan in ("contention", "failure"):
+            rate = args.rates[1] if len(args.rates) == 3 else args.rates[0]
+            conditions = [("steady", "matched_control", rate), (args.plan, "intervention", rate)]
     rotations = {condition: rng.sample(POLICIES, len(POLICIES)) for condition in conditions}
     first_repeat = 1 + getattr(args, "repetition_offset", 0)
     for repeat in range(first_repeat, first_repeat + args.repetitions):
@@ -172,7 +175,7 @@ def generate_trials(args):
             base_order = rotations[condition]
             offset = (repeat - 1) % len(base_order)
             order = base_order[offset:] + base_order[:offset]
-            for strategy in order:
+            for strategy in ([args.strategy] if getattr(args, "strategy", None) else order):
                 trials.append({"scenario": scenario, "level": level, "rate": rate,
                                "strategy": strategy, "repetition": repeat})
     return trials
@@ -182,11 +185,12 @@ def measurement(args, trial):
     duration = args.measurement
     rate = trial["rate"]
     settings = {"rate": rate, "duration": duration, "scenario": trial["scenario"],
-                "segments": [["plateau", duration, rate, rate]], "offered": duration * rate}
+                "segments": [["plateau", duration, rate, rate]], "offered": duration * rate,
+                "schedule_version": 2}
     if trial["scenario"] == "burst":
         segments = []
         previous = rate
-        peak = args.rates[2]
+        peak = args.rates[-1]
         for name, fraction in WORKLOADS["burst"]["segments"]:
             seconds = round(duration * fraction) if name != "recovery" else duration - sum(s[1] for s in segments)
             target = peak if name in ("rise", "peak") else rate
@@ -204,7 +208,7 @@ def measurement(args, trial):
     if any(s[1] <= 0 for s in segments):
         raise ValueError("Measurement duration is too short for the selected schedule")
     return settings | {"segments": segments, "stages": [[s[1], s[3]] for s in segments],
-                       "offered": sum(s[1] * (s[2] + s[3]) / 2 for s in segments)}
+                       "offered": sum(s[1] * (s[2] + s[3]) for s in segments) // 2}
 
 
 def health_snapshot(snapshot, cluster):
@@ -268,6 +272,8 @@ def k6_phase(executable, script, directory, name, config, token):
                     memory = resources.host_memory()
                     low_memory = low_memory + 1 if memory and memory["free_bytes"] < 768 * 1024**2 else 0
                     if low_memory >= 2:
+                        write(directory / f"{name}-memory-stop.json",
+                              {"epoch": time.time(), "host_memory": memory, "floor_bytes": 768 * 1024**2})
                         raise RuntimeError("Unsafe host memory pressure during k6 phase (below 768 MiB)")
                     if time.monotonic() >= deadline:
                         raise subprocess.TimeoutExpired(command, config["duration"] + 90)
@@ -328,6 +334,8 @@ def run_trial(args, directory, trial, cluster, original, username, password, k6,
     token = None
     stop = threading.Event()
     sampler = None
+    intervention_worker = None
+    intervention_stop = threading.Event()
     signal_path = directory / "contention-signal.json"
     try:
         token, session = login(args.base_url, username, password,
@@ -388,14 +396,20 @@ def run_trial(args, directory, trial, cluster, original, username, password, k6,
             write(directory / "adaptive-warmup.json",
                   resources.pod_readiness(args.namespace, gateway_pod, 8080, "adaptive-scores"))
         counter_boundary(args, directory, "before", cluster)
-        if trial["scenario"] == "contention":
+        if trial["scenario"] in ("contention", "failure"):
             target = args.contention_pod
             duration = args.measurement
             meta["contention"] = {"pod": target, "uid": cluster["pods"][target]["uid"],
-                                  "onset_s": duration // 3, "duration_s": duration // 3,
+                                  "onset_s": duration // 3,
+                                  "duration_s": min(18 if trial["scenario"] == "failure" else 20, duration // 3),
                                   "stimulus": args.stimulus}
             write(signal_path, meta["contention"] | {"measurement_dispatch_pending": True})
-            print(f"Contention marker: {signal_path}", flush=True)
+            print(f"Intervention marker: {signal_path}", flush=True)
+            if args.stimulus in ("cpu-250m", "process-pause"):
+                from intervention import execute
+                intervention_worker = threading.Thread(target=execute, args=(
+                    args.namespace, directory, meta["contention"], intervention_stop))
+                intervention_worker.start()
         meta["measure_process"] = k6_phase(k6, inputs / "predict.js", directory, "measure", config | settings, token)
         meta["cooldown_started"] = time.time()
         write(directory / "trial.json", meta)
@@ -409,7 +423,7 @@ def run_trial(args, directory, trial, cluster, original, username, password, k6,
         if current_cluster(args) != cluster:
             raise RuntimeError("Serving identity or weights changed during trial")
         verify_strategy(api(args.base_url, STRATEGY, token), trial["strategy"], cluster["weights"])
-        if trial["scenario"] == "contention":
+        if trial["scenario"] in ("contention", "failure"):
             meta["intervention"] = read(directory / "intervention.json")
         meta["status"] = "collected"
     except (ValueError, RuntimeError, OSError, KeyError, subprocess.TimeoutExpired) as exc:
@@ -417,6 +431,9 @@ def run_trial(args, directory, trial, cluster, original, username, password, k6,
         raise
     finally:
         stop.set()
+        intervention_stop.set()
+        if intervention_worker is not None:
+            intervention_worker.join()
         if sampler is not None:
             sampler.join()
         try:
@@ -441,7 +458,9 @@ def loopback_url(value):
 
 def arguments():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--plan", choices=("pilot", "ramp", "steady", "chapter5", "contention"), default="pilot")
+    parser.add_argument("--strategy", choices=POLICIES, help="Restrict a diagnostic pilot to one routing strategy")
+    parser.add_argument("--expected-adaptive-policy", choices=("original", "observed"))
+    parser.add_argument("--plan", choices=("pilot", "ramp", "steady", "burst", "chapter5", "contention", "failure"), default="pilot")
     parser.add_argument("--base-url", type=loopback_url, default="http://127.0.0.1:8000")
     parser.add_argument("--prom-url", type=loopback_url, default="http://127.0.0.1:9090")
     parser.add_argument("--context", default="minikube")
@@ -473,6 +492,8 @@ def arguments():
     parser.add_argument("--validate-only", action="store_true")
     parser.add_argument("--schema", type=Path, default=HERE / "corpus-schema.json")
     args = parser.parse_args()
+    if args.strategy and args.plan != "pilot":
+        parser.error("--strategy is only supported for diagnostic pilot runs")
     if args.repetition_offset < 0 or (args.repetition_offset and args.plan != "pilot"):
         parser.error("--repetition-offset requires the pilot plan and a nonnegative value")
     if args.resume_trial is not None and (args.plan != "pilot" or not args.output or args.resume_trial < 1):
@@ -493,15 +514,26 @@ def arguments():
     if args.plan != "pilot":
         if not args.rates or sorted(set(args.rates)) != args.rates or args.rates[0] <= 0:
             parser.error("Provide increasing positive --rates")
-        if args.plan != "ramp" and len(args.rates) != 3:
-            parser.error("Formal plans require three common rates")
-    if args.plan == "contention" and not (args.contention_pod and args.stimulus):
-        parser.error("Contention needs a fixed --contention-pod and --stimulus")
-    if args.plan in ("chapter5", "contention") and args.measurement < 30:
-        parser.error("Burst and contention schedules need at least 30 s of measurement")
-    if args.contention_pod and args.plan != "contention":
-        parser.error("--contention-pod requires the contention plan")
-    if not args.validate_only and args.plan in ("steady", "chapter5", "contention") and not args.capacity_input:
+        if args.plan == "burst" and len(args.rates) != 2:
+            parser.error("Burst requires two qualified common rates")
+        if args.plan == "chapter5" and len(args.rates) != 3:
+            parser.error("Use three common rates for chapter5")
+        if (args.plan == "failure" and len(args.rates) != 1) or (
+                args.plan == "contention" and len(args.rates) not in (1, 3)):
+            parser.error("Use one qualified rate for interventions, or three for the existing contention layout")
+        if args.plan == "steady" and len(args.rates) > 3:
+            parser.error("Use at most three common rates for the steady comparison")
+    if args.plan in ("contention", "failure") and not (args.contention_pod and args.stimulus):
+        parser.error("Interventions need a fixed --contention-pod and --stimulus")
+    if args.plan in ("burst", "chapter5", "contention", "failure") and args.measurement < 60:
+        parser.error("Burst and contention schedules need at least 60 s of measurement")
+    if args.contention_pod and args.plan not in ("contention", "failure"):
+        parser.error("--contention-pod requires an intervention plan")
+    if args.plan == "failure" and args.stimulus != "process-pause":
+        parser.error("Failure requires the bounded process-pause stimulus")
+    if args.plan == "contention" and args.stimulus == "process-pause":
+        parser.error("Process pause is only supported by the failure plan")
+    if not args.validate_only and args.plan in ("steady", "burst", "chapter5", "contention", "failure") and not args.capacity_input:
         parser.error("Formal runs need --capacity-input")
     return args
 
@@ -522,33 +554,44 @@ def main():
         raise RuntimeError("k6 was not found. Install it or pass --k6 with its absolute path")
     if resources.run_command("kubectl", "config", "current-context") != args.context:
         raise RuntimeError(f"Select Kubernetes context {args.context} before running")
-    version = resources.run_command(executable, "version")
     if args.node_k6_image:
         service = resources.kubectl("-n", args.namespace, "get", "service", "backend", "-o", "json")
         port = next(p["port"] for p in service["spec"]["ports"] if p["port"] == 8000)
         args.node_service_base = f'http://{service["spec"]["clusterIP"]}:{port}'
-        version = resources.run_command("docker", "run", "--rm", args.node_k6_image, "version")
-        health = resources.run_command("docker", "run", "--rm", "--network", f"container:{args.context}",
-                                       "--entrypoint", "wget", args.node_k6_image,
-                                       "-qO-", args.node_service_base + "/health")
+        version, health = resources.run_command(
+            "docker", "run", "--rm", "--network", f"container:{args.context}",
+            "--entrypoint", "sh", args.node_k6_image, "-c",
+            'k6 version && wget -qO- "$1"', "nexus-preflight", args.node_service_base + "/health",
+        ).split("\n", 1)
         if json.loads(health)["status"] != "healthy":
             raise RuntimeError("Backend Service health check from node network failed")
+    else:
+        version = resources.run_command(executable, "version")
     config_map = resources.kubectl("-n", args.namespace, "get", "configmap", "mlops-config", "-o", "json")["data"]
     freshness = float(config_map["ADAPTIVE_METRIC_MAX_AGE_S"])
     if not args.restart_gateway and args.idle_seconds < freshness:
         raise RuntimeError(f"Use --idle-seconds >= {freshness:g} to expire request observations")
     cluster = current_cluster(args)
-    if args.plan == "contention" and args.contention_pod not in cluster["replicas"]:
+    if args.expected_adaptive_policy and cluster["adaptive_policy"] != args.expected_adaptive_policy:
+        raise RuntimeError("Gateway Adaptive policy does not match requested experimental variant")
+    if args.plan in ("contention", "failure") and args.contention_pod not in cluster["replicas"]:
         raise ValueError("Contention target is not a ready inference replica")
     if any(row["app"] in ("inference-service", "inference-gateway") and
            not all(c["resources"].get("limits", {}).get("cpu") for c in row["containers"].values())
            for row in cluster["pods"].values()):
         raise RuntimeError("Inference and gateway CPU limits must be available for analysis")
-    sample = resources.sample(args.namespace)
-    if sample["host_memory"] and sample["host_memory"]["free_bytes"] < 768 * 1024**2:
+    memory = resources.host_memory()
+    if memory and memory["free_bytes"] < 768 * 1024**2:
         raise RuntimeError("Host free memory below 768 MiB at preflight")
-    if set(cluster["pods"]) - {row["pod"] for row in sample["pods"]}:
-        raise RuntimeError("Metrics Server samples are missing for required workloads")
+    observations = resources.cadvisor_samples(args.namespace, cluster["pods"])
+    coverage = {(row["pod"], row["metric"]) for row in observations}
+    required = {(name, metric) for name, pod in cluster["pods"].items()
+                if pod["app"] in ("inference-gateway", "inference-service")
+                for metric in ("container_cpu_usage_seconds_total", "container_memory_working_set_bytes")}
+    if required - coverage:
+        raise RuntimeError("cAdvisor CPU or memory samples are missing for benchmark containers")
+    sample = {"collected_epoch": time.time(), "identity": cluster["pods"],
+              "cadvisor": observations, "host_memory": memory, "host_cpu_ticks": resources.host_cpu_ticks()}
     prometheus_config = resources.prometheus(args.prom_url, "status/config")["yaml"]
     if "job_name: inference-gateway" not in prometheus_config and 'job_name: "inference-gateway"' not in prometheus_config:
         raise RuntimeError("Prometheus gateway scrape configuration is not loaded")
@@ -592,6 +635,7 @@ def main():
         replica_uids=[cluster["pods"][name]["uid"] for name in cluster["replicas"]],
         namespace=args.namespace, context=args.context, base_url=args.base_url,
         minikube_limits=resources.minikube_limits(args.context), gateway_reset=args.restart_gateway,
+        adaptive_policy=cluster["adaptive_policy"],
         generator={"placement": "node network" if args.node_k6_image else "Windows host",
                    "image": args.node_k6_image,
                    "prediction_base": getattr(args, "node_service_base", args.base_url)},
@@ -623,7 +667,7 @@ def main():
     root.mkdir(parents=True)
     inputs = root / "inputs"
     inputs.mkdir()
-    for name in ("predict.js", "corpus.json", "workloads.json", "run.py", "sample_resources.py", "analyze.py"):
+    for name in ("predict.js", "corpus.json", "workloads.json", "run.py", "sample_resources.py", "analyze.py", "intervention.py"):
         shutil.copy2(HERE / name, inputs / name)
     write(inputs / "schema.json", schema)
     (inputs / "prometheus.yaml").write_text(prometheus_config, encoding="utf-8")

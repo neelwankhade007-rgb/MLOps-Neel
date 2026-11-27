@@ -131,6 +131,37 @@ def figures(output, rate, records, block, native):
     return urls
 
 
+def capacity_curves(output, blocks):
+    if not blocks:
+        return
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    values = [row for (rate, _), group in sorted(blocks.items()) for row in measurements(group)]
+    save_csv(output / "capacity-run-level.csv",
+             ("strategy", "block", "offered_rps", "successful_rps", "p95_ms", "raw"), values)
+    for metric, ylabel, name in (
+        ("successful_rps", "Successful throughput (requests/s)", "offered-vs-achieved"),
+        ("p95_ms", "P95 latency (ms)", "latency-vs-offered"),
+    ):
+        fig, ax = plt.subplots(figsize=(6.3, 3.5), facecolor="white")
+        rates = sorted({row["offered_rps"] for row in values})
+        for policy in POLICIES:
+            groups = [[r[metric] for r in values if r["offered_rps"] == rate and r["strategy"] == policy]
+                      for rate in rates]
+            ax.errorbar(rates, [mean(group) for group in groups],
+                        yerr=[stdev(group) if len(group) > 1 else 0 for group in groups],
+                        marker="o", capsize=3, color=COLOR[policy], label=LABEL[policy])
+        ax.set(xlabel="Offered load (requests/s)", ylabel=ylabel, ylim=(0, None))
+        ax.set_xticks(rates)
+        ax.grid(alpha=.25)
+        ax.legend(frameon=False)
+        for ext in ("png", "svg"):
+            fig.savefig(output / f"{name}.{ext}", dpi=300, bbox_inches="tight", facecolor="white")
+        plt.close(fig)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("output", type=Path)
@@ -157,6 +188,7 @@ def main():
     diagnostics = [{"block": x["block"], "offered_rps": x["rate"], "validation": x["validation"]} for x in exclusions]
     save_csv(output / "excluded-blocks.csv", ("block", "offered_rps", "validation"), diagnostics)
     if chosen:
+        capacity_curves(output, {key: value for key, value in blocks.items() if key[1] == chosen[1]})
         rate, signature = chosen
         selected = blocks[chosen]
         records = measurements(selected)

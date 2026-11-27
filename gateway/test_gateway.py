@@ -777,7 +777,12 @@ class TestTelemetryGatewayIntegration:
         assert snapshot["replicas"][0]["traffic_share_pct"] == 50.0
 
 
-def test_gateway_dynamic_weights_endpoints():
+def test_gateway_dynamic_weights_endpoints(monkeypatch):
+    import importlib
+    router_module = importlib.import_module("router")
+    monkeypatch.setattr(router_module, "ADAPTIVE_WEIGHTS", dict(router_module.ADAPTIVE_WEIGHTS))
+    monkeypatch.setattr(router, "_weights", list(router.weights))
+    monkeypatch.setattr(router, "_wrr_current", list(router._wrr_current))
     from main import app
     from fastapi.testclient import TestClient
     client = TestClient(app)
@@ -807,3 +812,141 @@ def test_gateway_dynamic_weights_endpoints():
     assert resp.status_code == 400
 
 
+
+
+@pytest.mark.parametrize("cpu_percent", [(10, 10, 10), (10, 10.001, 10.002)])
+def test_adaptive_cold_replica_starvation_is_reproducible(cpu_percent):
+    """Equal service times do not permit unobserved ready replicas to recover."""
+    r = RoundRobinRouter()
+    r._endpoints = ["10.0.0.1", "10.0.0.2", "10.0.0.3"]
+    urls = [f"http://{ip}:8000" for ip in r._endpoints]
+    r._cpu_pct = dict(zip(urls, cpu_percent))
+    r._cpu_sampled_at = dict.fromkeys(urls, time.time())
+    for _ in range(300):
+        selected = r.next_endpoint("adaptive")
+        assert selected == urls[0]
+        r.record_result(selected, 5, 200, "adaptive")
+    decision = r.last_adaptive_decision()
+    assert decision["scores"][urls[1]] == pytest.approx(.5 if cpu_percent[0] == cpu_percent[1] else .6)
+    assert r._observations[urls[1]]["latency_at"] is None
+    assert all(obs["active"] == 0 for obs in r._observations.values())
+
+
+def test_adaptive_prefers_observed_faster_replica_with_equal_other_signals():
+    r = RoundRobinRouter()
+    r._endpoints = ["10.0.0.1", "10.0.0.2"]
+    slow, fast = [f"http://{ip}:8000" for ip in r._endpoints]
+    r.record_result(slow, 40, 200)
+    r.record_result(fast, 5, 200)
+    assert r.next_endpoint("adaptive") == fast
+
+
+@pytest.mark.parametrize("policy", ["original", "observed"])
+def test_cancelled_upstream_attempt_releases_adaptive_inflight(policy):
+    import asyncio
+    from main import forward_prediction
+
+    r = RoundRobinRouter(policy)
+    r._endpoints = ["10.0.0.1"]
+    endpoint = "http://10.0.0.1:8000"
+    request = MagicMock()
+    request.headers = {}
+    request.body = AsyncMock(return_value=b"{}")
+    with patch("main.router", r), patch("httpx.AsyncClient.post", side_effect=asyncio.CancelledError):
+        with pytest.raises(asyncio.CancelledError):
+            asyncio.run(forward_prediction(request, "adaptive", [0, 0]))
+    assert r._observations[endpoint]["active"] == 0
+    assert r._probe_endpoint is None
+    assert list(r._observations[endpoint]["errors"]) == [1.0]
+
+
+def test_observed_policy_bootstraps_and_prefers_faster_replica(monkeypatch):
+    now = [100.0]
+    monkeypatch.setattr("router.time.monotonic", lambda: now[0])
+    r = RoundRobinRouter("observed")
+    r._endpoints = ["10.0.0.1", "10.0.0.2", "10.0.0.3"]
+    urls = [f"http://{ip}:8000" for ip in r._endpoints]
+    times = dict(zip(urls, [3, 9, 18]))
+    selections = {}
+    for i in range(300):
+        selected = r.next_endpoint("adaptive")
+        selections[selected] = selections.get(selected, 0) + 1
+        r.record_result(selected, times[selected], 200, "adaptive")
+        now[0] += .2
+    evidence = r.last_adaptive_decision()["observations"]
+    assert [evidence[url]["bootstrap_probes"] for url in urls] == [3, 3, 3]
+    assert selections[urls[0]] >= 285
+    assert all(evidence[url]["age_s"] < 18 for url in urls)
+    assert sum(obs["refresh_probes"] for obs in evidence.values()) <= 30
+
+
+def test_observed_policy_detects_speed_change(monkeypatch):
+    now = [100.0]
+    monkeypatch.setattr("router.time.monotonic", lambda: now[0])
+    r = RoundRobinRouter("observed")
+    r._endpoints = ["10.0.0.1", "10.0.0.2"]
+    first, second = [f"http://{ip}:8000" for ip in r._endpoints]
+    selected = []
+    for i in range(600):
+        target = r.next_endpoint("adaptive")
+        latency = 5 if target == first else (12 if i < 50 else 1)
+        r.record_result(target, latency, 200, "adaptive")
+        selected.append(target)
+        now[0] += .2
+    assert selected[40:50].count(first) == 10
+    assert selected[-50:].count(second) > 45
+
+
+def test_observed_policy_serializes_probes_and_reseeds_recovered_replica(monkeypatch):
+    r = RoundRobinRouter("observed")
+    r.check_health = False
+    ips = ["10.0.0.1", "10.0.0.2"]
+    monkeypatch.setattr(r, "_resolve_endpoints", lambda: ips)
+    r.refresh()
+    first, second = [f"http://{ip}:8000" for ip in ips]
+    assert r.next_endpoint("adaptive") == first
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        others = list(executor.map(lambda _: r.next_endpoint("adaptive"), range(20)))
+    assert sum(o["bootstrap_probes"] for o in r.last_adaptive_decision()["observations"].values()) == 1
+    r.record_result(first, 1, None, "adaptive")
+    for target in others:
+        r.record_result(target, 1, 200, "adaptive")
+    ips = ["10.0.0.1"]
+    r.refresh()
+    ips = ["10.0.0.1", "10.0.0.2"]
+    r.refresh()
+    assert r.next_endpoint("adaptive") == second
+    assert r.last_adaptive_decision()["observations"][second]["bootstrap_probes"] == 1
+
+
+def test_observed_policy_collects_homogeneous_replicas_without_cpu():
+    r = RoundRobinRouter("observed")
+    r._endpoints = ["10.0.0.1", "10.0.0.2", "10.0.0.3"]
+    for _ in range(30):
+        selected = r.next_endpoint("adaptive")
+        r.record_result(selected, 5, 200, "adaptive")
+    assert all(row["completed"] >= 3 for row in r.last_adaptive_decision()["observations"].values())
+
+
+def test_refresh_eligibility_uses_latest_observation_age_and_global_gap(monkeypatch):
+    now = [100.0]
+    monkeypatch.setattr("router.time.monotonic", lambda: now[0])
+    r = RoundRobinRouter("observed")
+    r._endpoints = ["10.0.0.1", "10.0.0.2", "10.0.0.3"]
+    urls = [f"http://{ip}:8000" for ip in r._endpoints]
+    for url in urls:
+        for _ in range(3):
+            r.record_result(url, 1, 200, "adaptive")
+    now[0] += 14.9
+    target = r.next_endpoint("adaptive")
+    r.record_result(target, 1, 200, "adaptive")
+    assert sum(o["refresh_probes"] for o in r._observations.values()) == 0
+    now[0] += .2
+    target = r.next_endpoint("adaptive")
+    r.record_result(target, 1, 200, "adaptive")
+    assert sum(o["refresh_probes"] for o in r._observations.values()) == 1
+    now[0] += 1
+    target = r.next_endpoint("adaptive")
+    r.record_result(target, 1, 200, "adaptive")
+    assert sum(o["refresh_probes"] for o in r._observations.values()) == 1

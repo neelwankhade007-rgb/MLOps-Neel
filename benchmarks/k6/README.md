@@ -96,3 +96,15 @@ Each suite contains frozen inputs and hashes, script and k6 versions, deployment
 | Figures 5.1–5.4 | P95 and successful throughput versus common steady offered load, measurement-aligned per-replica CPU series, and grouped success shares. Across-repetition sample standard deviation appears when at least two results exist. |
 
 Analysis also exports burst phase counts, P95 and the lag to the first five-second recovery window meeting the success and latency gates. Means and sample standard deviations use run-level statistics with measurement counts. cAdvisor CPU intervals must lie wholly inside measurement, span at most 30 seconds, and share their right-hand source timestamp with a memory sample. Duplicate source timestamps are deduplicated and resets rejected. Adaptive keeps its original Metrics Server inputs. Missing values remain blank and figures with no observations are omitted. Validation records discrepancies, invalid trials and request ID collisions. Inference uses abbreviated request IDs, so the runner uses the k6 iteration index as the per-scenario record key.
+
+### Phase 1 scheduler and preflight
+
+Constant schedules end the executor halfway between the final intended arrival and the next slot. The nominal measurement window and exact arrival gate remain unchanged. Ramp and burst schedules have a zero-rate executor tail to let the nominal right-edge crossing dispatch. New ramp archives validate the integrated integer arrival count exactly and record phase-unassigned dispatches and drops explicitly. The previous schedule signatures and archived measurements are preserved.
+
+Node-mode preflight combines generator version and authenticated-path Service reachability checks at the health endpoint, then verifies cAdvisor CPU and memory coverage for the benchmark containers. The adaptive gateway still uses Metrics Server for scoring. On a phase memory stop, an additional JSON record captures the triggering free-memory reading and the existing 768 MiB floor. Run real k6 scheduler integration against a loopback fixture by setting NEXUS_TEST_K6 to the k6 executable and invoking pytest for test_benchmark.py.
+
+### Adaptive observation policy
+
+The gateway reads ADAPTIVE_POLICY at start. Set it to original to reproduce the greedy control or observed to collect initial and periodic observations using normal authenticated predictions. The observed policy budgets at most one periodic probe every two seconds and only probes ready, idle replicas. The gateway's adaptive-scores endpoint reports the active policy, per-endpoint observation age and cumulative bootstrap/refresh counts.
+
+For a diagnostic pilot, use --strategy adaptive --expected-adaptive-policy original (or observed) with --restart-gateway, --rate 5 and the pinned --node-k6-image. The runner verifies the deployed variant and archives it in the frozen signature. Use separate output directories and the same repetition offset for the two policies in a matched pair.

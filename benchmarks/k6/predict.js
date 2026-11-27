@@ -16,10 +16,14 @@ const scenario = {
 if (config.stages) {
   scenario.startRate = config.rate;
   scenario.stages = config.stages.map(([seconds, target]) => ({ duration: seconds + 's', target }));
+  // Give k6's final area crossing time to dispatch before its executor deadline.
+  // The 1 ns transition contributes less than half an arrival for supported rates.
+  scenario.stages.push({duration: '1ns', target: 0}, {duration: '200ms', target: 0});
 } else {
   scenario.rate = config.rate;
-  // Keep the arrival exactly at the right boundary outside the measurement window.
-  scenario.duration = (config.duration * 1000 - 1) + 'ms';
+  // The periodic executor begins at slot zero. End halfway through the
+  // final inter-arrival gap so the deadline and the next timer cannot race.
+  scenario.duration = (config.duration * 1000 - 500 / config.rate).toFixed(6) + 'ms';
 }
 export const options = {
   scenarios: { [config.scenario]: scenario },

@@ -164,3 +164,90 @@ def test_cadvisor_windows_require_matching_identity_and_in_window_samples():
     assert samples[0]["window"] == "5.0s"
     with pytest.raises(ValueError, match="counter reset"):
         analyze.cadvisor_windows(rows + [base | {"metric": cpu, "source_ms": 26000, "value": 1}], identity, 10, 20)
+
+
+def test_phase_edges_assign_each_arrival_once():
+    segments = [["first", 1, 5, 5], ["second", 1, 5, 5]]
+    request = lambda ms: {"started_ms": ms, "valid": True, "timeout": False, "duration_ms": 1}
+    constant = analyze.phase_stats(segments, [request(1000), request(2000)], [], 1)
+    ramp = analyze.phase_stats(segments, [request(2000), request(3000)], [], 1, right_closed=True)
+    assert [p["successes"] for p in constant] == [1, 1]
+    assert [p["successes"] for p in ramp] == [1, 1]
+
+
+@pytest.mark.parametrize("scenario,rate,seconds,stages,expected", [
+    ("plateau", 5, 60, None, 300),
+    ("ramp", 5, 2, [[2, 10]], 15),
+    ("burst", 5, 8, [[2, 10], [2, 10], [2, 5], [2, 5]], 60),
+])
+def test_k6_fixture_exact_arrivals(tmp_path, scenario, rate, seconds, stages, expected):
+    import os
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    executable = os.environ.get("NEXUS_TEST_K6")
+    if not executable:
+        pytest.skip("Set NEXUS_TEST_K6 to run the loopback scheduler integration")
+    class FixtureHandler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            self.rfile.read(int(self.headers["Content-Length"]))
+            payload = b'{"prediction":"0","deployment":"fixture","request_id":"fixture","replica_id":"pod","latency_ms":1,"gateway_meta":null}'
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+        def log_message(self, *_):
+            pass
+
+    with ThreadingHTTPServer(("127.0.0.1", 0), FixtureHandler) as server:
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        settings = {"scenario": scenario, "duration": seconds, "rate": rate, "vus": 10,
+                    "seed": 42, "deployment": "fixture", "strategy": "native",
+                    "url": f"http://127.0.0.1:{server.server_port}/predict", "endpoints": {"pod": "fixture"}}
+        if stages:
+            settings["stages"] = stages
+        try:
+            phase = run.k6_phase(executable, run.HERE / "predict.js", tmp_path, "measure", settings, "fixture")
+        finally:
+            server.shutdown()
+            worker.join()
+    counts = analyze.k6_counts(tmp_path / "measure-k6.jsonl")
+    assert phase["return_code"] == 0
+    assert counts["requests"] == counts["valid"] == expected
+    assert counts["dropped"] == 0
+
+
+def test_phase3_burst_uses_qualified_pair_and_exact_integral():
+    args = Namespace(plan="burst", seed=42, repetitions=2, rates=[5, 10], measurement=60)
+    trials = run.generate_trials(args)
+    assert len(trials) == 8
+    config = run.measurement(args, trials[0])
+    assert config["rate"] == 5
+    assert max(rate for _, rate in config["stages"]) == 10
+    assert sum(seconds for seconds, _ in config["stages"]) == 60
+    assert config["offered"] == 375
+
+
+def test_intervention_protocol_has_matched_controls():
+    args = Namespace(plan="failure", seed=42, repetitions=2, rates=[5], measurement=60)
+    trials = run.generate_trials(args)
+    assert len(trials) == 16
+    for repeat in (1, 2):
+        for scenario in ("steady", "failure"):
+            assert {r["strategy"] for r in trials if r["scenario"] == scenario
+                    and r["repetition"] == repeat} == set(run.POLICIES)
+
+
+def test_bounded_cpu_worker_reports_delivered_duty_cycle():
+    import subprocess
+    import sys
+    from intervention import WORKER
+
+    result = subprocess.run([sys.executable, "-c", WORKER, "cpu-250m", ".4"],
+                            capture_output=True, text=True, timeout=5, check=True)
+    actual = json.loads(result.stdout)
+    assert actual["exit_code"] == 0
+    assert .3 < actual["ended_epoch"] - actual["started_epoch"] < 1.5
+    assert 0 < actual["worker_cpu_seconds"] < .2
