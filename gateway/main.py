@@ -56,6 +56,7 @@ def ready(response: Response):
     return {
         "status": "ready",
         "available_replicas": router.endpoint_count,
+        "adaptive_policy": router.adaptive_policy,
         "wrr_weights": router.weights,
         "model_run_id": router.model_run_id or MODEL_RUN_ID,
     }
@@ -149,18 +150,17 @@ async def forward_prediction(request: Request, strategy: str, upstream_ns: list[
 
             url = f"{target}/predict"
             attempted.append(target)
+            attempt_status = None
             try:
                 upstream_resp = await post_upstream(client, url, body, strategy, upstream_ns)
-                router.record_result(target, upstream_ns[1] / 1e6, upstream_resp.status_code, strategy)
+                attempt_status = upstream_resp.status_code
                 break  # Successfully communicated with replica
             except httpx.TimeoutException:
-                router.record_result(target, upstream_ns[1] / 1e6, None, strategy)
                 raise HTTPException(
                     status_code=status.HTTP_504_GATEWAY_TIMEOUT,
                     detail=f"Upstream replica timed out after {UPSTREAM_TIMEOUT_S}s",
                 )
             except httpx.ConnectError as exc:
-                router.record_result(target, upstream_ns[1] / 1e6, None, strategy)
                 last_error = exc
                 logger.warning(
                     "Connection error to replica %s (attempt %d/%d): %s",
@@ -172,11 +172,12 @@ async def forward_prediction(request: Request, strategy: str, upstream_ns: list[
                         detail=f"Failed to connect to replica at {target}: {exc}",
                     )
             except httpx.HTTPError as exc:
-                router.record_result(target, upstream_ns[1] / 1e6, None, strategy)
                 raise HTTPException(
                     status_code=status.HTTP_502_BAD_GATEWAY,
                     detail=f"Upstream request failed: {exc}",
                 )
+            finally:
+                router.record_result(target, upstream_ns[1] / 1e6, attempt_status, strategy)
 
     latency_ms = (time.perf_counter() - t_start) * 1000.0
 
@@ -229,12 +230,7 @@ def list_replicas():
 @app.get("/adaptive-scores")
 def adaptive_scores():
     """Expose the scores and choice from the latest adaptive routing decision."""
-    decision = router.last_adaptive_decision()
-    return {
-        "scores": decision["scores"],
-        "selected_endpoint": decision["selected_endpoint"],
-        "calculated_at": decision["calculated_at"],
-    }
+    return router.last_adaptive_decision()
 
 
 # -- weights and configuration --------------------------------------------

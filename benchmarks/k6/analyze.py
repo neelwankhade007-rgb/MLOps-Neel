@@ -146,7 +146,7 @@ def cadvisor_windows(observations, identity, start, end):
     return result
 
 
-def resource_results(path, identity, start, end):
+def resource_results(path, identity, start, end, interrupted_pod=None):
     unique = {}
     errors = 0
     churn = False
@@ -155,7 +155,10 @@ def resource_results(path, identity, start, end):
         if "error" in sample:
             errors += 1
             continue
-        churn |= sample["identity"] != identity
+        actual = sample["identity"]
+        if interrupted_pod and interrupted_pod in actual:
+            actual = actual | {interrupted_pod: actual[interrupted_pod] | {"ready": identity[interrupted_pod]["ready"]}}
+        churn |= actual != identity
         observations.extend(sample.get("cadvisor", []))
         for value in sample.get("pods", []):
             source = value["source_epoch"]
@@ -180,12 +183,15 @@ def resource_results(path, identity, start, end):
     return series, summaries, churn, errors
 
 
-def phase_stats(segments, requests, dropped, start):
+def phase_stats(segments, requests, dropped, start, right_closed=False):
     result = []
     offset = 0
     for index, (name, seconds, from_rate, to_rate) in enumerate(segments):
         begin, end = start + offset, start + offset + seconds
-        sample = [r for r in requests if begin <= r["started_ms"] / 1000 < end]
+        def in_phase(timestamp):
+            return begin < timestamp <= end if right_closed else begin <= timestamp < end
+
+        sample = [r for r in requests if in_phase(r["started_ms"] / 1000)]
         successful = [r for r in sample if r["valid"]]
         result.append({"phase": name, "start_s": offset, "duration_s": seconds,
                        "offered_approx": seconds * (from_rate + to_rate) / 2,
@@ -194,7 +200,7 @@ def phase_stats(segments, requests, dropped, start):
                        "failures": len(sample) - len(successful),
                        "error_pct": (len(sample) - len(successful)) * 100 / len(sample) if sample else None,
                        "timeouts": sum(r["timeout"] for r in sample),
-                       "dropped": sum(n for t, n in dropped if begin <= t < end),
+                       "dropped": sum(n for t, n in dropped if in_phase(t)),
                        "p95_ms": percentile([r["duration_ms"] for r in successful], .95)})
         offset += seconds
     return result
@@ -216,6 +222,8 @@ def recovery_lag(requests, phases, start, p95_ceiling_ms, minimum_success):
 
 def observed_contention(meta, start):
     expected, actual = meta["contention"], meta["intervention"]
+    if actual.get("exit_code") != 0 or not {"started_epoch", "ended_epoch"} <= actual.keys():
+        return False
     start_s = actual["started_epoch"] - start
     end_s = actual["ended_epoch"] - start
     return (actual["pod"] == expected["pod"] and actual["uid"] == expected["uid"] and
@@ -261,7 +269,8 @@ def summarize(directory):
         fatal.append("k6 counters and request records disagree")
     if config.get("stages") is None and counts["requests"] + counts["dropped"] != offered:
         fatal.append("Dispatched plus dropped did not match scheduled plateau arrivals")
-    elif config.get("stages") and abs(counts["requests"] + counts["dropped"] - offered) > 1:
+    elif config.get("stages") and abs(counts["requests"] + counts["dropped"] - offered) > (
+            0 if config.get("schedule_version") == 2 else 1):
         fatal.append("Dispatched plus dropped did not match integrated ramp arrivals")
     corpus = read_json(directory.parent / "inputs" / "corpus.json")
     if (len({r["iteration"] for r in requests}) != len(requests) or
@@ -294,16 +303,20 @@ def summarize(directory):
          "successes": replica_counts[name], "share_pct": replica_counts[name] / len(successful) * 100 if successful else None}
         for index, name in enumerate(names)
     ]
-    row["phases"] = phase_stats(config["segments"], requests, counts["dropped_points"], start)
+    row["phases"] = phase_stats(config["segments"], requests, counts["dropped_points"], start,
+                                right_closed=bool(config.get("stages") and config.get("schedule_version") == 2))
+    row["phase_unassigned_requests"] = len(requests) - sum(p["dispatched"] for p in row["phases"])
+    row["phase_unassigned_drops"] = counts["dropped"] - sum(p["dropped"] for p in row["phases"])
     row["recovery_lag_s"] = recovery_lag(requests, row["phases"], start,
                                         meta["suite"]["settings"]["p95_ceiling_ms"],
                                         meta["suite"]["settings"]["minimum_success"])
-    if trial["level"] == "matched_control" or trial["scenario"] == "contention":
-        if trial["scenario"] == "contention" and not observed_contention(meta, start):
-            fatal.append("Contention timing, stimulus, exit status or target diverged from protocol")
+    if trial["level"] == "matched_control" or trial["scenario"] in ("contention", "failure"):
+        if trial["scenario"] in ("contention", "failure") and not observed_contention(meta, start):
+            fatal.append("Intervention timing, stimulus, exit status or target diverged from protocol")
         else:
-            if trial["scenario"] == "contention":
+            if trial["scenario"] in ("contention", "failure"):
                 intervention = meta["intervention"]
+                row["intervention"] = intervention
                 onset = intervention["started_epoch"] - start
                 stop = intervention["ended_epoch"] - start
             else:
@@ -355,7 +368,15 @@ def summarize(directory):
     except (ValueError, StopIteration) as exc:
         fatal.append(str(exc))
     row["gateway_spans"] = spans
-    series, summary, churn, errors = resource_results(directory / "resources.jsonl", meta["cluster"]["pods"], start, end)
+    interrupted = meta.get("intervention", {}).get("pod") if trial["scenario"] == "failure" else None
+    series, summary, churn, errors = resource_results(
+        directory / "resources.jsonl", meta["cluster"]["pods"], start, end, interrupted)
+    if interrupted:
+        row["target_readiness"] = [
+            {"seconds": sample["collected_epoch"] - start, "ready": sample["identity"][interrupted]["ready"]}
+            for sample in rows(directory / "resources.jsonl")
+            if interrupted in sample.get("identity", {})
+        ]
     if churn:
         fatal.append("Pod readiness, identity, resources or container restart changed")
     if errors:

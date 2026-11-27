@@ -33,6 +33,8 @@ spec:
               value: "8000"
             - name: DISCOVERY_INTERVAL_S
               value: "10"
+            - name: ADAPTIVE_POLICY
+              value: "observed"
             - name: WRR_WEIGHTS
               valueFrom:
                 configMapKeyRef:

@@ -33,6 +33,9 @@ if not math.isfinite(ADAPTIVE_METRIC_MAX_AGE_S) or ADAPTIVE_METRIC_MAX_AGE_S <= 
 K8S_API_URL = "https://kubernetes.default.svc"
 K8S_TOKEN_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/token"
 K8S_CA_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
+ADAPTIVE_BOOTSTRAP_SAMPLES = 3
+ADAPTIVE_PROBE_AGE_S = min(15.0, ADAPTIVE_METRIC_MAX_AGE_S)
+ADAPTIVE_PROBE_INTERVAL_S = 2.0
 ADAPTIVE_WEIGHTS = {"latency": 0.40, "active": 0.30, "cpu": 0.20, "error": 0.10}
 
 
@@ -52,7 +55,12 @@ class RoundRobinRouter:
     Concurrency-safe strategy router over dynamically discovered inference replicas.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, adaptive_policy: Optional[str] = None) -> None:
+        self.adaptive_policy = adaptive_policy or os.environ.get("ADAPTIVE_POLICY", "original")
+        if self.adaptive_policy not in ("original", "observed"):
+            raise ValueError("ADAPTIVE_POLICY must be original or observed")
+        self._probe_endpoint: Optional[str] = None
+        self._last_refresh_probe = -math.inf
         self._lock = threading.Lock()
         self._endpoints: List[str] = []
         self._index: int = 0
@@ -134,6 +142,8 @@ class RoundRobinRouter:
                     url: score for url, score in self._last_adaptive_scores.items()
                     if url in ready_urls
                 }
+                if self._probe_endpoint not in ready_urls:
+                    self._probe_endpoint = None
                 if self._last_adaptive_selection not in ready_urls:
                     self._last_adaptive_selection = None
                 self._cpu_pct = {url: value for url, value in self._cpu_pct.items() if url in ready_urls}
@@ -188,6 +198,9 @@ class RoundRobinRouter:
             "latencies": deque(maxlen=50),
             "errors": deque(maxlen=50),
             "active": 0,
+            "completed": 0,
+            "bootstrap_probes": 0,
+            "refresh_probes": 0,
             "latency_at": None,
             "error_at": None,
         }
@@ -391,10 +404,44 @@ class RoundRobinRouter:
         with self._lock:
             return dict(self._adaptive_scores_locked())
 
+    def _observation_probe_locked(self, candidates: List[int]) -> Optional[int]:
+        if self._probe_endpoint is not None:
+            return None
+        now = time.monotonic()
+        eligible = []
+        for index in candidates:
+            url = f"http://{self._endpoints[index]}:{INFERENCE_PORT}"
+            observation = self._observations[url]
+            if observation["active"]:
+                continue
+            sampled_at = observation["latency_at"]
+            age = math.inf if sampled_at is None else now - sampled_at
+            eligible.append((index, url, observation, age))
+        cold = [row for row in eligible if row[2]["completed"] < ADAPTIVE_BOOTSTRAP_SAMPLES]
+        if cold:
+            index, url, observation, _ = min(cold, key=lambda row: row[2]["completed"])
+            observation["bootstrap_probes"] += 1
+        else:
+            stale = [row for row in eligible if row[3] >= ADAPTIVE_PROBE_AGE_S]
+            if not stale or now - self._last_refresh_probe < ADAPTIVE_PROBE_INTERVAL_S:
+                return None
+            index, url, observation, _ = max(stale, key=lambda row: row[3])
+            observation["refresh_probes"] += 1
+            self._last_refresh_probe = now
+        self._probe_endpoint = url
+        return index
+
     def last_adaptive_decision(self) -> Dict[str, Any]:
         """Return the exact scores and selected endpoint from the latest adaptive decision."""
         with self._lock:
+            now = time.monotonic()
             return {
+                "policy": self.adaptive_policy,
+                "observations": {
+                    url: {key: obs[key] for key in ("completed", "active", "bootstrap_probes", "refresh_probes")} |
+                    {"age_s": None if obs["latency_at"] is None else now - obs["latency_at"]}
+                    for url, obs in self._observations.items()
+                },
                 "scores": dict(self._last_adaptive_scores),
                 "selected_endpoint": self._last_adaptive_selection,
                 "calculated_at": self._last_adaptive_scores_at,
@@ -434,6 +481,10 @@ class RoundRobinRouter:
                     lowest = min(scores.get(f"http://{self._endpoints[i]}:{INFERENCE_PORT}", 0.0) for i in candidates)
                     tied = [i for i in candidates if abs(scores.get(f"http://{self._endpoints[i]}:{INFERENCE_PORT}", 0.0) - lowest) < 1e-9]
                     index = next((i for i in tied if i >= self._adaptive_index), tied[0])
+                    if self.adaptive_policy == "observed":
+                        probe = self._observation_probe_locked(candidates)
+                        if probe is not None:
+                            index = probe
                     self._adaptive_index = (index + 1) % count
                 else:
                     index = self._index % count
@@ -455,6 +506,9 @@ class RoundRobinRouter:
                 return
             observation = self._observations.setdefault(endpoint, self._new_observation())
             observation["active"] = max(0, int(observation["active"]) - 1)
+            if self._probe_endpoint == endpoint and observation["active"] == 0:
+                self._probe_endpoint = None
+            observation["completed"] += 1
             observation["latencies"].append(max(0.0, float(latency_ms)))
             observation["errors"].append(1.0 if status_code is None or status_code < 200 or status_code >= 300 else 0.0)
             sampled_at = time.monotonic()
