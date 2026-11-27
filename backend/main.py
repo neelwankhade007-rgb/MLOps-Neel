@@ -135,6 +135,25 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depend
         "backend_session_id": BACKEND_SESSION_ID
     }
 
+@app.post("/api/v1/auth/refresh")
+def refresh_token(current_user: User = Depends(get_current_user)):
+    new_token = create_access_token(data={"sub": current_user.username})
+    return {
+        "access_token": new_token,
+        "token_type": "bearer",
+        "backend_session_id": BACKEND_SESSION_ID
+    }
+
+@app.get("/health")
+@app.get("/api/v1/health")
+def health_check():
+    return {
+        "status": "healthy",
+        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "session_id": BACKEND_SESSION_ID,
+        "active_deployments": len(deployed_models)
+    }
+
 @app.get("/api/v1/auth/session")
 def get_session_info():
     return {"session_id": BACKEND_SESSION_ID}
@@ -196,8 +215,16 @@ def create_dataset(
     return {"success": True, "dataset": dataset}
 
 @app.get("/api/v1/datasets")
-def get_datasets(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    return db.query(Dataset).all()
+def get_datasets(
+    skip: int = 0,
+    limit: Optional[int] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    query = db.query(Dataset)
+    if limit is not None and limit > 0:
+        return query.offset(skip).limit(limit).all()
+    return query.all()
 
 @app.delete("/api/v1/datasets/{dataset_id}")
 def delete_dataset(dataset_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
@@ -263,8 +290,17 @@ def start_training(req: ExperimentCreate, db: Session = Depends(get_db), current
         raise HTTPException(status_code=400, detail=f"Training failed: {safe_error}")
 
 @app.get("/api/v1/experiments")
-def get_experiments(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    experiments = db.query(Experiment).order_by(Experiment.id.desc()).all()
+def get_experiments(
+    skip: int = 0,
+    limit: Optional[int] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    query = db.query(Experiment).order_by(Experiment.id.desc())
+    if limit is not None and limit > 0:
+        experiments = query.offset(skip).limit(limit).all()
+    else:
+        experiments = query.all()
     updated = False
     for exp in experiments:
         if not exp.target_column and exp.run_id:
@@ -313,8 +349,16 @@ def register_model(req: ModelRegister, db: Session = Depends(get_db), current_us
     return {"success": True, "model": model}
 
 @app.get("/api/v1/models")
-def get_models(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    return db.query(RegisteredModel).all()
+def get_models(
+    skip: int = 0,
+    limit: Optional[int] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    query = db.query(RegisteredModel)
+    if limit is not None and limit > 0:
+        return query.offset(skip).limit(limit).all()
+    return query.all()
 
 @app.delete("/api/v1/models/{model_id}")
 def delete_model(model_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
@@ -369,8 +413,16 @@ def deploy_model(model_id: int, req: DeploymentCreate, db: Session = Depends(get
     return {"success": True, "deployment": deployment}
 
 @app.get("/api/v1/deployments")
-def get_deployments(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    return db.query(Deployment).all()
+def get_deployments(
+    skip: int = 0,
+    limit: Optional[int] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    query = db.query(Deployment)
+    if limit is not None and limit > 0:
+        return query.offset(skip).limit(limit).all()
+    return query.all()
 
 @app.delete("/api/v1/deployments/{deployment_id}")
 def delete_deployment(deployment_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
@@ -457,6 +509,16 @@ def predict(
                 f"Routing to mismatched model run is rejected."
             ),
         )
+
+    # Validate feature payload integrity
+    if not isinstance(req.features, dict) or len(req.features) == 0:
+        raise HTTPException(
+            status_code=422,
+            detail="Features payload must be a non-empty key-value dictionary.",
+        )
+    dangerous_keys = {"__proto__", "constructor", "prototype"}
+    if any(k in dangerous_keys for k in req.features.keys()):
+        raise HTTPException(status_code=422, detail="Invalid feature name provided.")
 
     # Forward predictions through the active strategy while preserving model-run validation.
     payload = json.dumps({"features": req.features}).encode("utf-8")

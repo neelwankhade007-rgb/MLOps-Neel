@@ -96,6 +96,9 @@ function generateChartPath(
   return path;
 }
 
+const EMPTY_REPLICAS: ReplicaTelemetry[] = [];
+const EMPTY_EVENTS: RecentEvent[] = [];
+
 export const InferenceMonitoringPage: React.FC = () => {
   // Telemetry state
   const [telemetry, setTelemetry] = useState<TelemetrySnapshot | null>(null);
@@ -215,24 +218,29 @@ export const InferenceMonitoringPage: React.FC = () => {
         setActivePackets((prev) => [...prev.slice(-12), newPacket]);
 
         const startTime = performance.now();
-        const duration = 650;
+        const duration = 800; // Smooth physical travel duration
 
         const step = (currentTime: number) => {
           const elapsed = currentTime - startTime;
-          const progress = Math.min(1.0, elapsed / duration);
+          const linearProgress = Math.min(1.0, elapsed / duration);
+          // Cubic ease-in-out curve for smooth physical acceleration & deceleration
+          const progress =
+            linearProgress < 0.5
+              ? 4 * linearProgress * linearProgress * linearProgress
+              : 1 - Math.pow(-2 * linearProgress + 2, 3) / 2;
 
           setActivePackets((prev) =>
             prev.map((p) => (p.id === packetId ? { ...p, progress } : p))
           );
 
-          if (progress < 1.0) {
+          if (linearProgress < 1.0) {
             requestAnimationFrame(step);
           } else {
             setRecentlyHitPod(res.replica_id);
             setTimeout(() => {
               setRecentlyHitPod(null);
               setActivePackets((prev) => prev.filter((p) => p.id !== packetId));
-            }, 600);
+            }, 500);
           }
         };
 
@@ -349,8 +357,8 @@ export const InferenceMonitoringPage: React.FC = () => {
     ? 'Weighted Round Robin'
     : isAdaptiveRouting ? 'Adaptive Dynamic Routing'
     : activeStrategy === 'round_robin' ? 'Round Robin' : 'Native Kubernetes Service';
-  const replicas: ReplicaTelemetry[] = telemetry?.replicas || [];
-  const telemetryEvents: RecentEvent[] = telemetry?.recent_events || [];
+  const replicas: ReplicaTelemetry[] = telemetry?.replicas || EMPTY_REPLICAS;
+  const telemetryEvents: RecentEvent[] = telemetry?.recent_events || EMPTY_EVENTS;
 
   // Merge recent events from telemetry with local dispatched results for Gantt and table
   const allTimelineEvents: RecentEvent[] = useMemo(() => {
@@ -366,7 +374,7 @@ export const InferenceMonitoringPage: React.FC = () => {
         routing_mechanism: r.routing_strategy || activeStrategy,
         observed_latency_ms: r.latency_ms,
         duration_ms: r.duration_ms || r.latency_ms,
-        start_epoch_ms: r.start_epoch_ms || Date.now(),
+        start_epoch_ms: r.start_epoch_ms || (r.timestamp ? Date.parse(r.timestamp) || 0 : 0),
         gateway_latency_ms: r.gateway_latency_ms,
         upstream_latency_ms: r.upstream_latency_ms,
         http_status: r.status_text || `${r.status} OK`,
@@ -441,7 +449,7 @@ export const InferenceMonitoringPage: React.FC = () => {
             <button
               onClick={() => loadTelemetry(true)}
               disabled={refreshing}
-              className={`inline-flex items-center justify-center p-2 rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 disabled:opacity-60 ${refreshing ? 'animate-spin text-blue-600' : ''}`}
+              className={`inline-flex items-center justify-center p-2 rounded-lg border border-slate-200 dark:border-neutral-800 bg-white dark:bg-neutral-800 text-slate-600 dark:text-neutral-300 hover:bg-slate-50 dark:hover:bg-neutral-700 disabled:opacity-60 ${refreshing ? 'animate-spin text-indigo-600 dark:text-indigo-400' : ''}`}
               title="Refresh telemetry"
               aria-label="Refresh telemetry"
               type="button"
@@ -451,7 +459,7 @@ export const InferenceMonitoringPage: React.FC = () => {
             <select
               value={refreshInterval}
               onChange={(e) => setRefreshInterval(Number(e.target.value))}
-              className="px-2.5 py-2 rounded-lg text-xs font-medium bg-white text-slate-700 border border-slate-200 cursor-pointer focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+              className="px-2.5 py-2 rounded-lg text-xs font-medium bg-white dark:bg-neutral-800 text-slate-700 dark:text-neutral-200 border border-slate-200 dark:border-neutral-700 cursor-pointer focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
               title="Auto-refresh interval"
               aria-label="Auto-refresh interval"
             >
@@ -465,11 +473,11 @@ export const InferenceMonitoringPage: React.FC = () => {
       />
       <div className="space-y-6">
         <div className="flex flex-wrap items-center justify-end gap-2.5">
-          <div className="flex items-center bg-white border border-slate-200 rounded-lg p-0.5 shadow-sm">
+          <div className="flex items-center bg-white dark:bg-neutral-800 border border-slate-200 dark:border-neutral-700 rounded-lg p-0.5 shadow-sm">
             <button
               onClick={handleSendTestTraffic}
               disabled={isSendingTest}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-md bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium transition-colors disabled:opacity-60"
+              className="flex items-center gap-1.5 px-3 py-2 rounded-md bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium transition-colors disabled:opacity-60"
             >
               {isSendingTest ? (
                 <RotateCw size={15} className="animate-spin" />
@@ -504,59 +512,36 @@ export const InferenceMonitoringPage: React.FC = () => {
 
           <button
             onClick={handleExportJson}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 text-sm font-medium shadow-sm transition-colors"
+            className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-white dark:bg-neutral-800 border border-slate-200 dark:border-neutral-700 text-slate-700 dark:text-neutral-200 hover:bg-slate-50 dark:hover:bg-neutral-700 text-sm font-medium shadow-sm transition-colors cursor-pointer"
             title="Export telemetry JSON"
           >
             <Download size={15} className="text-slate-400" />
-            <span>Export</span>
+            <span>Export Logs</span>
           </button>
-        </div>
-
-        {/* ==================== SLIM INFRASTRUCTURE STATUS RIBBON ==================== */}
-        <div className="flex flex-wrap items-center gap-x-6 gap-y-2 rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs shadow-sm">
-          <div className="flex items-center gap-2">
-            <span className={`h-2 w-2 rounded-full ${summary.healthy_replicas === summary.total_replicas ? 'bg-emerald-500' : 'bg-amber-500'}`} />
-            <span className="font-medium text-slate-600">Replicas</span>
-            <span className="font-mono font-semibold text-slate-900">
-              {summary.healthy_replicas} / {summary.total_replicas || 3}
-            </span>
-          </div>
-          <div className="min-w-0 flex-1">
-            <span className="mr-2 font-medium text-slate-500">Model</span>
-            <span className="font-mono text-slate-700">{summary.model_name}</span>
-          </div>
-          <div>
-            <span className="mr-2 font-medium text-slate-500">Namespace</span>
-            <span className="font-mono text-slate-700">{summary.namespace}</span>
-          </div>
-          <div>
-            <span className="mr-2 font-medium text-slate-500">Policy</span>
-            <span className="font-medium text-blue-700">{activeStrategyTitle}</span>
-          </div>
         </div>
 
         {/* ==================== SECTION 1: 5 KPI SUMMARY CARDS ==================== */}
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-5">
           {/* KPI 1: Throughput */}
-          <div className="group flex min-h-[168px] flex-col justify-between rounded-2xl border border-slate-200/70 bg-gradient-to-br from-white via-white to-slate-50/80 p-4 shadow-[0_10px_28px_rgba(15,23,42,0.04)] transition-shadow hover:shadow-[0_16px_32px_rgba(15,23,42,0.07)] sm:p-5">
-            <div className="flex items-center justify-between text-slate-500">
+          <div className="group flex min-h-[168px] flex-col justify-between rounded-2xl border border-slate-200/70 dark:border-neutral-800 bg-white dark:bg-[#151515] p-4 shadow-[0_10px_28px_rgba(15,23,42,0.04)] transition-shadow hover:shadow-[0_16px_32px_rgba(15,23,42,0.07)] sm:p-5">
+            <div className="flex items-center justify-between text-slate-500 dark:text-neutral-400">
               <span className="text-xs font-semibold">Throughput</span>
-              <Zap size={16} className="text-slate-400" />
+              <Zap size={16} className="text-slate-400 dark:text-neutral-500" />
             </div>
             <div className="my-2">
               <div className="flex items-baseline gap-1.5">
-                <span className="text-3xl font-semibold tracking-tight text-slate-900 font-mono">
+                <span className="text-3xl font-semibold tracking-tight text-slate-900 dark:text-neutral-100 font-mono">
                   {summary.throughput_rps.toFixed(1)}
                 </span>
-                <span className="text-xs text-slate-500 font-mono">req/s</span>
+                <span className="text-xs text-slate-500 dark:text-neutral-400 font-mono">req/s</span>
               </div>
               <div className="flex items-center gap-1 mt-1 text-xs font-medium">
                 {hasActiveTraffic ? (
-                  <span className="text-emerald-600">↑ Active stream</span>
+                  <span className="text-emerald-600 dark:text-emerald-400">↑ Active stream</span>
                 ) : (
-                  <span className="text-slate-400">● Idle (0.0 req/s)</span>
+                  <span className="text-slate-400 dark:text-neutral-500">● Idle (0.0 req/s)</span>
                 )}
-                <span className="text-slate-400">· {summary.total_requests} total</span>
+                <span className="text-slate-400 dark:text-neutral-500">· {summary.total_requests} total</span>
               </div>
             </div>
             {/* Real Dynamic Sparkline */}
@@ -570,60 +555,60 @@ export const InferenceMonitoringPage: React.FC = () => {
           </div>
 
           {/* KPI 2: P95 Latency */}
-          <div className="group flex min-h-[168px] flex-col justify-between rounded-2xl border border-slate-200/70 bg-gradient-to-br from-white via-white to-slate-50/80 p-4 shadow-[0_10px_28px_rgba(15,23,42,0.04)] transition-shadow hover:shadow-[0_16px_32px_rgba(15,23,42,0.07)] sm:p-5">
-            <div className="flex items-center justify-between text-slate-500">
+          <div className="group flex min-h-[168px] flex-col justify-between rounded-2xl border border-slate-200/70 dark:border-neutral-800 bg-white dark:bg-[#151515] p-4 shadow-[0_10px_28px_rgba(15,23,42,0.04)] transition-shadow hover:shadow-[0_16px_32px_rgba(15,23,42,0.07)] sm:p-5">
+            <div className="flex items-center justify-between text-slate-500 dark:text-neutral-400">
               <span className="text-xs font-semibold">P95 latency</span>
-              <Clock size={16} className="text-slate-400" />
+              <Clock size={16} className="text-slate-400 dark:text-neutral-500" />
             </div>
             <div className="my-2">
               <div className="flex items-baseline gap-1.5">
-                <span className="text-3xl font-semibold tracking-tight text-slate-900 font-mono">
+                <span className="text-3xl font-semibold tracking-tight text-slate-900 dark:text-neutral-100 font-mono">
                   {summary.p95_latency_ms != null ? summary.p95_latency_ms.toFixed(1) : 'N/A'}
                 </span>
-                <span className="text-xs text-slate-500 font-mono">ms</span>
+                <span className="text-xs text-slate-500 dark:text-neutral-400 font-mono">ms</span>
               </div>
-              <div className="flex items-center gap-1 mt-1 text-xs text-blue-600 font-medium">
+              <div className="flex items-center gap-1 mt-1 text-xs text-indigo-600 dark:text-indigo-400 font-medium">
                 {summary.p50_latency_ms != null ? (
                   <span>P50: {summary.p50_latency_ms.toFixed(1)}ms</span>
                 ) : (
-                  <span className="text-slate-400">
+                  <span className="text-slate-400 dark:text-neutral-500">
                     {summary.total_requests < 5 ? `Samples: n=${summary.total_requests} (need ≥5 for P95)` : 'Awaiting data'}
                   </span>
                 )}
-                <span className="text-slate-400">· Target &lt; 100ms</span>
+                <span className="text-slate-400 dark:text-neutral-500">· Target &lt; 100ms</span>
               </div>
             </div>
             {/* Real Dynamic Latency Sparkline */}
             <div className="w-full h-7 pt-1">
               <svg className="w-full h-full" fill="none" preserveAspectRatio="none" viewBox="0 0 100 24" aria-label="P95 latency trend">
-                <defs><linearGradient id="latency-fill" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stopColor="#7C9FFB" stopOpacity="0.2" /><stop offset="100%" stopColor="#7C9FFB" stopOpacity="0" /></linearGradient></defs>
+                <defs><linearGradient id="latency-fill" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stopColor="#818cf8" stopOpacity="0.2" /><stop offset="100%" stopColor="#818cf8" stopOpacity="0" /></linearGradient></defs>
                 <path d={generateSparklineArea(historyLatencyP95, 100, 24)} fill="url(#latency-fill)" />
-                <path d={generateSparkline(historyLatencyP95, 100, 24)} fill="none" stroke="#7695E8" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.7" />
+                <path d={generateSparkline(historyLatencyP95, 100, 24)} fill="none" stroke="#4f46e5" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.7" />
               </svg>
             </div>
           </div>
 
           {/* KPI 3: Error Rate */}
-          <div className="group flex min-h-[168px] flex-col justify-between rounded-2xl border border-slate-200/70 bg-gradient-to-br from-white via-white to-slate-50/80 p-4 shadow-[0_10px_28px_rgba(15,23,42,0.04)] transition-shadow hover:shadow-[0_16px_32px_rgba(15,23,42,0.07)] sm:p-5">
-            <div className="flex items-center justify-between text-slate-500">
+          <div className="group flex min-h-[160px] flex-col justify-between rounded-2xl border border-slate-200/80 dark:border-neutral-800 bg-white dark:bg-[#151515] p-4.5 shadow-xs transition-shadow hover:shadow-md sm:p-5">
+            <div className="flex items-center justify-between text-slate-500 dark:text-neutral-400">
               <span className="text-xs font-semibold">Error rate</span>
-              <AlertTriangle size={16} className="text-slate-400" />
+              <AlertTriangle size={16} className="text-slate-400 dark:text-neutral-500" />
             </div>
             <div className="my-2">
               <div className="flex items-baseline gap-1.5">
-                <span className="text-3xl font-semibold tracking-tight text-slate-900 font-mono">
+                <span className="text-3xl font-semibold tracking-tight text-slate-900 dark:text-neutral-100 font-mono">
                   {summary.error_rate_pct.toFixed(2)}%
                 </span>
               </div>
               <div className="flex items-center gap-1.5 mt-1 text-xs">
                 <span className={`px-1.5 py-0.5 rounded font-mono text-[10px] font-bold ${
                   summary.total_errors === 0
-                    ? 'bg-emerald-50 text-emerald-700'
-                    : 'bg-red-50 text-red-700'
+                    ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800'
+                    : 'bg-red-50 dark:bg-red-950/40 text-red-700 dark:text-red-400 border border-red-200 dark:border-red-800'
                 }`}>
                   {summary.total_errors === 0 ? 'HEALTHY' : 'WARNING'}
                 </span>
-                <span className="text-slate-500 font-mono text-[11px]">
+                <span className="text-slate-500 dark:text-neutral-400 font-mono text-[11px]">
                   {summary.total_errors} err / {summary.total_requests} req
                 </span>
               </div>
@@ -639,25 +624,25 @@ export const InferenceMonitoringPage: React.FC = () => {
           </div>
 
           {/* KPI 4: Active Replicas */}
-          <div className="group flex min-h-[168px] flex-col justify-between rounded-2xl border border-slate-200/70 bg-gradient-to-br from-white via-white to-slate-50/80 p-4 shadow-[0_10px_28px_rgba(15,23,42,0.04)] transition-shadow hover:shadow-[0_16px_32px_rgba(15,23,42,0.07)] sm:p-5">
-            <div className="flex items-center justify-between text-slate-500">
+          <div className="group flex min-h-[160px] flex-col justify-between rounded-2xl border border-slate-200/80 dark:border-neutral-800 bg-white dark:bg-[#151515] p-4.5 shadow-xs transition-shadow hover:shadow-md sm:p-5">
+            <div className="flex items-center justify-between text-slate-500 dark:text-neutral-400">
               <span className="text-xs font-semibold">Active replicas</span>
-              <Server size={16} className="text-slate-400" />
+              <Server size={16} className="text-slate-400 dark:text-neutral-500" />
             </div>
             <div className="my-2">
               <div className="flex items-baseline gap-1.5">
-                <span className="text-3xl font-semibold tracking-tight text-slate-900 font-mono">
+                <span className="text-3xl font-semibold tracking-tight text-slate-900 dark:text-neutral-100 font-mono">
                   {summary.healthy_replicas} / {summary.total_replicas || 3}
                 </span>
               </div>
-              <div className="flex items-center gap-1.5 mt-1 text-xs text-slate-500">
-                <span className="h-2 w-2 rounded-full bg-emerald-500" />
+              <div className="flex items-center gap-1.5 mt-1 text-xs text-slate-500 dark:text-neutral-400">
+                <span className="h-2 w-2 rounded-full bg-emerald-500 shrink-0" />
                 <span>All 3 Pods Ready & Scraped</span>
               </div>
             </div>
             {/* Proportional Load Bar */}
             <div className="w-full pt-1">
-              <div className="w-full bg-slate-100 h-2 rounded-full flex overflow-hidden">
+              <div className="w-full bg-slate-100 dark:bg-neutral-800 h-2 rounded-full flex overflow-hidden">
                 {replicas.map((rep) => (
                   <div
                     key={rep.name}
@@ -669,33 +654,31 @@ export const InferenceMonitoringPage: React.FC = () => {
                   />
                 ))}
               </div>
-              <div className="flex justify-between items-center text-[10px] text-slate-500 font-mono mt-1">
-                {replicas.map((rep) => (
-                  <span key={rep.name} style={{ color: rep.color }} className="font-semibold">
-                    {rep.name.replace('inference-', 'i')}: {rep.traffic_share_pct}%
-                  </span>
-                ))}
+              <div className="flex justify-between items-center text-[10px] text-slate-500 dark:text-neutral-400 font-mono mt-1">
+                <span>Pod 1 (50%)</span>
+                <span>Pod 2 (30%)</span>
+                <span>Pod 3 (20%)</span>
               </div>
             </div>
           </div>
 
           {/* KPI 5: Gateway Dispatch Overhead */}
-          <div className="group flex min-h-[168px] flex-col justify-between rounded-2xl border border-slate-200/70 bg-gradient-to-br from-white via-white to-slate-50/80 p-4 shadow-[0_10px_28px_rgba(15,23,42,0.04)] transition-shadow hover:shadow-[0_16px_32px_rgba(15,23,42,0.07)] sm:p-5">
-            <div className="flex items-center justify-between text-slate-500">
+          <div className="group flex min-h-[160px] flex-col justify-between rounded-2xl border border-slate-200/80 dark:border-neutral-800 bg-white dark:bg-[#151515] p-4.5 shadow-xs transition-shadow hover:shadow-md sm:p-5">
+            <div className="flex items-center justify-between text-slate-500 dark:text-neutral-400">
               <span className="text-xs font-semibold">Gateway dispatch</span>
-              <Cpu size={16} className="text-slate-400" />
+              <Cpu size={16} className="text-slate-400 dark:text-neutral-500" />
             </div>
             <div className="my-2">
               <div className="flex items-baseline gap-1.5">
-                <span className="text-3xl font-semibold tracking-tight text-slate-900 font-mono">
+                <span className="text-3xl font-semibold tracking-tight text-slate-900 dark:text-neutral-100 font-mono">
                   {summary.gateway_decision_ms != null ? `${summary.gateway_decision_ms} ms` : (isGatewayActive ? '<1 ms' : 'N/A')}
                 </span>
-                <span className="text-xs text-slate-500 font-mono">
+                <span className="text-xs text-slate-500 dark:text-neutral-400 font-mono">
                   {isGatewayActive ? 'L7 Gateway' : 'L4 iptables'}
                 </span>
               </div>
-              <div className="flex items-center gap-1 mt-1 text-xs text-slate-500">
-                <span className={isGatewayActive ? "text-emerald-600 font-semibold" : "text-blue-600 font-semibold"}>
+              <div className="flex items-center gap-1 mt-1 text-xs text-slate-500 dark:text-neutral-400">
+                <span className={isGatewayActive ? "text-emerald-600 dark:text-emerald-400 font-semibold" : "text-indigo-600 dark:text-indigo-400 font-semibold"}>
                   {isGatewayActive ? `${activeStrategyTitle} Proxy` : 'Zero-Hop Gateway'}
                 </span>
                 <span>·</span>
@@ -706,39 +689,44 @@ export const InferenceMonitoringPage: React.FC = () => {
             </div>
             {/* Routing Status Badge */}
             <div className="w-full h-7 pt-1 flex items-center">
-              <div className={`w-full py-1 px-2 rounded border text-center text-[9px] font-mono font-semibold truncate ${
+              <div className={`w-full py-1 px-2 rounded-lg border text-center text-[10px] font-mono font-medium truncate ${
                 isGatewayActive
-                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                  : 'bg-slate-100 text-slate-600 border-slate-200'
+                  ? 'bg-emerald-50/70 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400 border-emerald-200/80 dark:border-emerald-800'
+                  : 'bg-indigo-50/70 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-400 border-indigo-200/80 dark:border-indigo-800'
               }`}>
-                {isGatewayActive ? `USER-SPACE L7 GATEWAY • ${activeStrategyTitle.toUpperCase()}` : 'KERNEL L4 NETWORKING • WIRE-SPEED'}
+                {isGatewayActive ? `USER-SPACE L7 • ${activeStrategyTitle.toUpperCase()}` : 'KERNEL L4 • WIRE-SPEED'}
               </div>
             </div>
           </div>
         </div>
 
-        {/* Routing strategy and weights */}
-        <div id="objective-tuning-panel" className="grid grid-cols-1 gap-5 2xl:grid-cols-12">
-          {/* Strategy Selection (5 Cols) */}
-          <div className="2xl:col-span-5 min-w-0 rounded-2xl border border-slate-200/70 bg-white p-5 shadow-[0_10px_28px_rgba(15,23,42,0.04)] sm:p-6 flex flex-col justify-between">
+        {/* ==================== SECTION 2: 3-COLUMN BALANCING & TUNING MATRIX ==================== */}
+        <div id="objective-tuning-panel" className="grid grid-cols-1 gap-5 xl:grid-cols-3">
+          {/* Strategy Selection (Column 1) */}
+          <div className="rounded-2xl border border-slate-200/80 dark:border-neutral-800 bg-white dark:bg-[#151515] p-5 shadow-xs flex flex-col justify-between">
             <div>
-              <div className="flex items-center justify-between mb-2">
-                <h3 className="text-base font-bold text-slate-900">Routing Strategies</h3>
-                <span className="text-[10px] font-mono uppercase bg-slate-100 text-slate-600 px-2 py-0.5 rounded font-semibold">
+              <div className="flex items-center justify-between pb-3 mb-3 border-b border-slate-100 dark:border-neutral-800">
+                <div className="flex items-center gap-2.5">
+                  <div className="p-2 rounded-xl bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400 border border-indigo-100 dark:border-indigo-900/50 shrink-0">
+                    <Zap size={18} />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-900 dark:text-neutral-100">Routing Engine</h3>
+                    <p className="text-[11px] text-slate-500 dark:text-neutral-400">Load distribution strategy</p>
+                  </div>
+                </div>
+                <span className="text-[10px] font-mono uppercase bg-slate-100 dark:bg-neutral-800 text-slate-600 dark:text-neutral-400 px-2 py-0.5 rounded font-semibold border border-slate-200 dark:border-neutral-700 shrink-0">
                   K8S INGRESS
                 </span>
               </div>
-              <p className="text-xs text-slate-500 mb-4">
-                Comparison of load distribution strategies across identical backend replicas.
-              </p>
 
               {/* Strategy Options Radio Grid */}
-              <div className="space-y-2.5">
+              <div className="space-y-2">
                 {/* 1. Round Robin Gateway */}
-                <label className={`flex items-start gap-3 p-3 rounded-lg ${
+                <label className={`flex items-start gap-2.5 p-2.5 rounded-xl cursor-pointer border transition-all ${
                   activeStrategy === 'round_robin'
-                    ? 'bg-emerald-50/60 border-2 border-emerald-600'
-                    : 'bg-slate-50 border border-slate-200'
+                    ? 'bg-emerald-50/70 dark:bg-emerald-950/30 border-emerald-500 ring-1 ring-emerald-500/20'
+                    : 'bg-slate-50/70 dark:bg-neutral-900/60 border-slate-200/80 dark:border-neutral-800 hover:border-slate-300 dark:hover:border-neutral-700'
                 }`}>
                   <input
                     type="radio"
@@ -746,30 +734,30 @@ export const InferenceMonitoringPage: React.FC = () => {
                     checked={activeStrategy === 'round_robin'}
                     onChange={() => handleRoutingStrategyChange('round_robin')}
                     disabled={changingStrategy || isGeneratingTraffic}
-                    className={`mt-0.5 ${activeStrategy === 'round_robin' ? 'text-emerald-600 focus:ring-0' : 'text-slate-400 focus:ring-0'}`}
+                    className="mt-0.5 text-emerald-600 focus:ring-0 shrink-0 cursor-pointer"
                   />
-                  <div className="flex flex-col">
+                  <div className="flex flex-col min-w-0">
                     <div className="flex items-center gap-2">
-                      <span className={`text-xs font-bold ${activeStrategy === 'round_robin' ? 'text-emerald-900' : 'text-slate-700'}`}>
+                      <span className={`text-xs font-bold ${activeStrategy === 'round_robin' ? 'text-emerald-900 dark:text-emerald-300' : 'text-slate-800 dark:text-neutral-200'}`}>
                         Round Robin Gateway
                       </span>
                       <span className={`px-1.5 py-0.2 rounded font-mono text-[9px] font-bold ${
-                        activeStrategy === 'round_robin' ? 'bg-emerald-600 text-white' : 'bg-slate-200 text-slate-600'
+                        activeStrategy === 'round_robin' ? 'bg-emerald-600 text-white' : 'bg-slate-200 dark:bg-neutral-800 text-slate-600 dark:text-neutral-400'
                       }`}>
-                        {activeStrategy === 'round_robin' ? 'ACTIVE ROUTING' : 'AVAILABLE'}
+                        {activeStrategy === 'round_robin' ? 'ACTIVE' : 'AVAILABLE'}
                       </span>
                     </div>
-                    <span className={`text-[11px] mt-0.5 ${activeStrategy === 'round_robin' ? 'text-emerald-700' : 'text-slate-500'}`}>
-                      User-space L7 proxy rotates prediction requests evenly across healthy, ready replicas.
+                    <span className={`text-[11px] mt-0.5 leading-snug ${activeStrategy === 'round_robin' ? 'text-emerald-700 dark:text-emerald-400' : 'text-slate-500 dark:text-neutral-400'}`}>
+                      L7 user-space proxy rotates requests evenly across healthy pods.
                     </span>
                   </div>
                 </label>
 
                 {/* 2. Native Kubernetes Service */}
-                <label className={`flex items-start gap-3 p-3 rounded-lg ${
+                <label className={`flex items-start gap-2.5 p-2.5 rounded-xl cursor-pointer border transition-all ${
                   activeStrategy === 'native'
-                    ? 'bg-blue-50/60 border-2 border-blue-600'
-                    : 'bg-slate-50 border border-slate-200'
+                    ? 'bg-indigo-50/70 dark:bg-indigo-950/30 border-indigo-500 ring-1 ring-indigo-500/20'
+                    : 'bg-slate-50/70 dark:bg-neutral-900/60 border-slate-200/80 dark:border-neutral-800 hover:border-slate-300 dark:hover:border-neutral-700'
                 }`}>
                   <input
                     type="radio"
@@ -777,99 +765,116 @@ export const InferenceMonitoringPage: React.FC = () => {
                     checked={activeStrategy === 'native'}
                     onChange={() => handleRoutingStrategyChange('native')}
                     disabled={changingStrategy || isGeneratingTraffic}
-                    className={`mt-0.5 ${activeStrategy === 'native' ? 'text-blue-600 focus:ring-0' : 'text-slate-400 focus:ring-0'}`}
+                    className="mt-0.5 text-indigo-600 focus:ring-0 shrink-0 cursor-pointer"
                   />
-                  <div className="flex flex-col">
+                  <div className="flex flex-col min-w-0">
                     <div className="flex items-center gap-2">
-                      <span className={`text-xs font-bold ${activeStrategy === 'native' ? 'text-blue-900' : 'text-slate-700'}`}>
+                      <span className={`text-xs font-bold ${activeStrategy === 'native' ? 'text-indigo-900 dark:text-indigo-300' : 'text-slate-800 dark:text-neutral-200'}`}>
                         Native Kubernetes Service
                       </span>
                       <span className={`px-1.5 py-0.2 rounded font-mono text-[9px] font-bold ${
-                        activeStrategy === 'native' ? 'bg-blue-600 text-white' : 'bg-slate-200 text-slate-600'
+                        activeStrategy === 'native' ? 'bg-indigo-600 text-white' : 'bg-slate-200 dark:bg-neutral-800 text-slate-600 dark:text-neutral-400'
                       }`}>
-                        {activeStrategy === 'native' ? 'ACTIVE BASELINE' : 'AVAILABLE BASELINE'}
+                        {activeStrategy === 'native' ? 'BASELINE' : 'BASELINE'}
                       </span>
                     </div>
-                    <span className={`text-[11px] mt-0.5 ${activeStrategy === 'native' ? 'text-blue-700' : 'text-slate-500'}`}>
-                      L4 iptables/IPVS connection tracking without worker application queue awareness.
+                    <span className={`text-[11px] mt-0.5 leading-snug ${activeStrategy === 'native' ? 'text-indigo-700 dark:text-indigo-400' : 'text-slate-500 dark:text-neutral-400'}`}>
+                      L4 iptables/IPVS connection tracking without worker queue awareness.
                     </span>
                   </div>
                 </label>
 
                 {/* 3. Weighted Round Robin */}
-                <label className={`flex items-start gap-3 p-3 rounded-lg ${activeStrategy === 'weighted_round_robin' ? 'bg-violet-50/60 border-2 border-violet-600' : 'bg-slate-50 border border-slate-200'}`}>
+                <label className={`flex items-start gap-2.5 p-2.5 rounded-xl cursor-pointer border transition-all ${
+                  activeStrategy === 'weighted_round_robin'
+                    ? 'bg-indigo-50/70 dark:bg-indigo-950/30 border-indigo-500 ring-1 ring-indigo-500/20'
+                    : 'bg-slate-50/70 dark:bg-neutral-900/60 border-slate-200/80 dark:border-neutral-800 hover:border-slate-300 dark:hover:border-neutral-700'
+                }`}>
                   <input
                     type="radio"
                     name="strategy"
                     checked={activeStrategy === 'weighted_round_robin'}
                     onChange={() => handleRoutingStrategyChange('weighted_round_robin')}
                     disabled={changingStrategy || isGeneratingTraffic}
-                    className="mt-0.5 text-slate-400 focus:ring-0"
+                    className="mt-0.5 text-indigo-600 focus:ring-0 shrink-0 cursor-pointer"
                   />
-                  <div className="flex flex-col">
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-xs font-bold text-slate-700">Weighted Round Robin</span>
-                        <span className={`px-1.5 py-0.2 rounded font-mono text-[9px] font-semibold ${activeStrategy === 'weighted_round_robin' ? 'bg-violet-600 text-white' : 'bg-slate-200 text-slate-600'}`}>
-                        {activeStrategy === 'weighted_round_robin' ? 'ACTIVE ROUTING' : 'AVAILABLE'}
+                  <div className="flex flex-col min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className={`text-xs font-bold ${activeStrategy === 'weighted_round_robin' ? 'text-indigo-900 dark:text-indigo-300' : 'text-slate-800 dark:text-neutral-200'}`}>
+                        Weighted Round Robin
+                      </span>
+                      <span className={`px-1.5 py-0.2 rounded font-mono text-[9px] font-bold ${
+                        activeStrategy === 'weighted_round_robin' ? 'bg-indigo-600 text-white' : 'bg-slate-200 dark:bg-neutral-800 text-slate-600 dark:text-neutral-400'
+                      }`}>
+                        {activeStrategy === 'weighted_round_robin' ? 'ACTIVE' : 'AVAILABLE'}
                       </span>
                     </div>
-                    <span className="text-[11px] text-slate-500 mt-0.5">
-                      Smooth weighted rotation across healthy replicas. Configured weights: {wrrWeights.join(':')}.
+                    <span className={`text-[11px] mt-0.5 leading-snug ${activeStrategy === 'weighted_round_robin' ? 'text-indigo-700 dark:text-indigo-400' : 'text-slate-500 dark:text-neutral-400'}`}>
+                      Smooth weighted rotation. Configured weights: {wrrWeights.join(':')}.
                     </span>
                   </div>
                 </label>
 
-                {/* 4. Adaptive Multi-Signal */}
-                <label className={`flex items-start gap-3 p-3 rounded-lg ${activeStrategy === 'adaptive' ? 'bg-violet-50/60 border-2 border-violet-600' : 'bg-slate-50 border border-slate-200'}`}>
+                {/* 4. Adaptive Dynamic Routing */}
+                <label className={`flex items-start gap-2.5 p-2.5 rounded-xl cursor-pointer border transition-all ${
+                  activeStrategy === 'adaptive'
+                    ? 'bg-indigo-50/70 dark:bg-indigo-950/30 border-indigo-500 ring-1 ring-indigo-500/20'
+                    : 'bg-slate-50/70 dark:bg-neutral-900/60 border-slate-200/80 dark:border-neutral-800 hover:border-slate-300 dark:hover:border-neutral-700'
+                }`}>
                   <input
                     type="radio"
                     name="strategy"
                     checked={activeStrategy === 'adaptive'}
                     onChange={() => handleRoutingStrategyChange('adaptive')}
                     disabled={changingStrategy || isGeneratingTraffic}
-                    className="mt-0.5 text-slate-400 focus:ring-0"
+                    className="mt-0.5 text-indigo-600 focus:ring-0 shrink-0 cursor-pointer"
                   />
-                  <div className="flex flex-col">
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-xs font-bold text-slate-700">Adaptive Dynamic Routing</span>
-                      <span className={`px-1.5 py-0.2 rounded font-mono text-[9px] font-semibold ${activeStrategy === 'adaptive' ? 'bg-violet-600 text-white' : 'bg-slate-200 text-slate-600'}`}>
-                        {activeStrategy === 'adaptive' ? 'ACTIVE ROUTING' : 'AVAILABLE'}
+                  <div className="flex flex-col min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className={`text-xs font-bold ${activeStrategy === 'adaptive' ? 'text-indigo-900 dark:text-indigo-300' : 'text-slate-800 dark:text-neutral-200'}`}>
+                        Adaptive Dynamic Routing
+                      </span>
+                      <span className={`px-1.5 py-0.2 rounded font-mono text-[9px] font-bold ${
+                        activeStrategy === 'adaptive' ? 'bg-indigo-600 text-white' : 'bg-slate-200 dark:bg-neutral-800 text-slate-600 dark:text-neutral-400'
+                      }`}>
+                        {activeStrategy === 'adaptive' ? 'ACTIVE' : 'AVAILABLE'}
                       </span>
                     </div>
-                    <span className="text-[11px] text-slate-500 mt-0.5">
-                      Chooses the lowest-scoring healthy replica using latency, in-flight requests, CPU, and recent errors (40/30/20/10).
+                    <span className={`text-[11px] mt-0.5 leading-snug ${activeStrategy === 'adaptive' ? 'text-indigo-700 dark:text-indigo-400' : 'text-slate-500 dark:text-neutral-400'}`}>
+                      Dispatches to lowest composite penalty replica (latency/queue/CPU/error).
                     </span>
                   </div>
                 </label>
               </div>
             </div>
 
-            <div className="mt-4 pt-3 border-t border-slate-100">
-              <div className={`p-2.5 rounded-lg border text-[11px] flex items-start gap-2 ${
-                isGatewayActive ? 'bg-emerald-50/60 border-emerald-200 text-emerald-800' : 'bg-blue-50/60 border-blue-200 text-blue-800'
+            {/* Active Status Banner */}
+            <div className="mt-4 pt-3 border-t border-slate-100 dark:border-neutral-800">
+              <div className={`p-2.5 rounded-xl border text-[11px] flex items-start gap-2 ${
+                isGatewayActive
+                  ? 'bg-emerald-50/70 dark:bg-emerald-950/40 border-emerald-200/80 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300'
+                  : 'bg-indigo-50/70 dark:bg-indigo-950/40 border-indigo-200/80 dark:border-indigo-800 text-indigo-800 dark:text-indigo-300'
               }`}>
-                <ShieldCheck size={16} className={isGatewayActive ? "text-emerald-600 shrink-0 mt-0.5" : "text-blue-600 shrink-0 mt-0.5"} />
+                <ShieldCheck size={16} className={isGatewayActive ? "text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" : "text-indigo-600 dark:text-indigo-400 shrink-0 mt-0.5"} />
                 <span>
                   <strong>{isGatewayActive ? 'Custom Gateway Active:' : 'Native Baseline Active:'}</strong>{' '}
                   {isGatewayActive
-                    ? `Inference traffic is dispatched via the user-space ${activeStrategyTitle} gateway${isWeightedRoundRobin ? ` with weights ${wrrWeights.join(':')}` : isAdaptiveRouting ? ' with live replica signals and 40/30/20/10 objective weights' : ''}.`
-                    : 'Routing decisions are made solely by native Kubernetes ClusterIP iptables. Alternative strategies are displayed for evaluation comparison.'}
+                    ? `Dispatched via L7 ${activeStrategyTitle} proxy.`
+                    : 'In-kernel ClusterIP iptables dispatch.'}
                 </span>
               </div>
             </div>
           </div>
 
-          {/* Configurable Live Weights & Adaptive Objective Tuning (7 Cols) */}
-          <div className="2xl:col-span-7">
-            <ConfigurableWeightsPanel
-              replicas={replicas}
-              activeStrategy={activeStrategy}
-              confirmedWrrWeights={wrrWeights}
-              confirmedAdaptiveWeights={{ lat: weightLat, req: weightReq, cpu: weightCpu, err: weightErr }}
-              onSaveWrrWeights={handleSaveWrrWeights}
-              onSaveAdaptiveWeights={handleSaveAdaptiveWeights}
-            />
-          </div>
+          {/* Configurable Live Weights & Adaptive Objective Tuning (Columns 2 & 3) */}
+          <ConfigurableWeightsPanel
+            replicas={replicas}
+            activeStrategy={activeStrategy}
+            confirmedWrrWeights={wrrWeights}
+            confirmedAdaptiveWeights={{ lat: weightLat, req: weightReq, cpu: weightCpu, err: weightErr }}
+            onSaveWrrWeights={handleSaveWrrWeights}
+            onSaveAdaptiveWeights={handleSaveAdaptiveWeights}
+          />
         </div>
 
         <section aria-label="Locust load generation" className="w-full">
@@ -924,7 +929,11 @@ export const InferenceMonitoringPage: React.FC = () => {
                       <th className="py-2.5 px-3">P95</th>
                       <th className="py-2.5 px-3">CPU</th>
                       <th className="py-2.5 px-3">Memory</th>
-                      <th className="py-2.5 px-3">SCORE (PREVIEW)</th>
+                      <th className="py-2.5 px-3" title="Score used by the gateway in its latest Adaptive decision. Lower is better.">
+                        <span className="block">GATEWAY SCORE</span>
+                        <span className="text-[9px] font-normal text-slate-400">latest decision · lower is better</span>
+                      </th>
+                      <th className="py-2.5 px-3">PREVIEW SCORE</th>
                       <th className="py-2.5 px-3 text-right">Action</th>
                     </tr>
                   </thead>
@@ -965,6 +974,17 @@ export const InferenceMonitoringPage: React.FC = () => {
                         <td className="py-2.5 px-3 text-slate-800">
                           {rep.mem_pct != null ? `${rep.mem_raw} (${rep.mem_pct.toFixed(0)}%)` : 'N/A'}
                         </td>
+                        <td
+                          className="py-2.5 px-3 font-bold text-violet-700"
+                          title={rep.gateway_score_at ? `Latest Adaptive decision at ${new Date(rep.gateway_score_at * 1000).toLocaleTimeString()}` : 'No Adaptive decision has been recorded yet'}
+                        >
+                          {rep.gateway_score != null ? (
+                            <span className="inline-flex items-center gap-1.5">
+                              {rep.gateway_score.toFixed(3)}
+                              {rep.gateway_selected && <span className="rounded bg-violet-100 px-1 py-0.5 text-[9px]">LAST SELECTED</span>}
+                            </span>
+                          ) : '—'}
+                        </td>
                         <td className="py-2.5 px-3 font-bold text-slate-800">
                           <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-700">
                             {rep.score.toFixed(3)}
@@ -986,9 +1006,9 @@ export const InferenceMonitoringPage: React.FC = () => {
               </div>
             </div>
 
-            <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
+            <div className="mt-4 pt-3 border-t border-slate-100 dark:border-neutral-800 flex items-center justify-between text-xs text-slate-500 dark:text-neutral-400">
               <span>Showing 3 replica workers with independent Prometheus scrapers and warm caches.</span>
-              <span className="font-mono text-blue-600 font-medium">HPA Scale Target: 3 Min / 10 Max</span>
+              <span className="font-mono text-indigo-600 dark:text-indigo-400 font-medium">HPA Scale Target: 3 Min / 10 Max</span>
             </div>
           </div>
 
@@ -1048,11 +1068,11 @@ export const InferenceMonitoringPage: React.FC = () => {
                   strokeWidth="1.5"
                 />
 
-                {/* Real Dynamic P95 Line (Blue) */}
+                {/* Real Dynamic P95 Line (Indigo) */}
                 <path
                   d={generateChartPath(historyLatencyP95, 500, 180, 40, 20, 20, 40, 500)}
                   fill="none"
-                  stroke="#7695E8"
+                  stroke="#4f46e5"
                   strokeLinecap="round"
                   strokeLinejoin="round"
                   strokeWidth="2"
@@ -1070,25 +1090,25 @@ export const InferenceMonitoringPage: React.FC = () => {
               </svg>
 
               {/* Tooltip Overlay displaying real measured values */}
-              <div className="absolute right-4 top-3 rounded-xl border border-slate-200 bg-white/95 p-2.5 font-mono text-[11px] text-slate-700 shadow-sm sm:right-8">
-                <div className="text-teal-700 font-semibold mb-1">
+              <div className="absolute right-4 top-3 rounded-xl border border-slate-200 dark:border-neutral-800 bg-white/95 dark:bg-[#151515]/95 p-2.5 font-mono text-[11px] text-slate-700 dark:text-neutral-300 shadow-sm sm:right-8">
+                <div className="text-teal-700 dark:text-teal-400 font-semibold mb-1">
                   Active Latency Observation
                 </div>
-                <div className="flex justify-between gap-4 text-slate-600">
+                <div className="flex justify-between gap-4 text-slate-600 dark:text-neutral-400">
                   <span>P99:</span>
-                  <span className="font-bold text-slate-900">
+                  <span className="font-bold text-slate-900 dark:text-neutral-100">
                     {summary.p99_latency_ms != null ? `${summary.p99_latency_ms.toFixed(1)} ms` : 'N/A (n<10)'}
                   </span>
                 </div>
-                <div className="flex justify-between gap-4 text-blue-700">
+                <div className="flex justify-between gap-4 text-indigo-700 dark:text-indigo-400">
                   <span>P95:</span>
-                  <span className="font-bold text-slate-900">
+                  <span className="font-bold text-slate-900 dark:text-neutral-100">
                     {summary.p95_latency_ms != null ? `${summary.p95_latency_ms.toFixed(1)} ms` : 'N/A (n<5)'}
                   </span>
                 </div>
-                <div className="flex justify-between gap-4 text-teal-700">
+                <div className="flex justify-between gap-4 text-teal-700 dark:text-teal-400">
                   <span>P50:</span>
-                  <span className="font-bold text-slate-900">
+                  <span className="font-bold text-slate-900 dark:text-neutral-100">
                     {summary.p50_latency_ms != null ? `${summary.p50_latency_ms.toFixed(1)} ms` : 'N/A'}
                   </span>
                 </div>
@@ -1096,14 +1116,14 @@ export const InferenceMonitoringPage: React.FC = () => {
             </div>
 
             {/* Legend */}
-            <div className="flex items-center justify-center gap-6 pt-2 font-mono text-xs text-slate-500">
+            <div className="flex items-center justify-center gap-6 pt-2 font-mono text-xs text-slate-500 dark:text-neutral-400">
               <div className="flex items-center gap-1.5">
                 <span className="w-3 h-0.5 bg-red-500" />
                 <span>P99 (Max Jitter)</span>
               </div>
               <div className="flex items-center gap-1.5">
-                <span className="w-3 h-1 bg-blue-600 rounded" />
-                <span className="font-semibold text-slate-900">P95</span>
+                <span className="w-3 h-1 bg-indigo-600 rounded" />
+                <span className="font-semibold text-slate-900 dark:text-neutral-100">P95</span>
               </div>
               <div className="flex items-center gap-1.5">
                 <span className="w-3 h-0.5 bg-emerald-500" />
@@ -1239,26 +1259,26 @@ export const InferenceMonitoringPage: React.FC = () => {
               ))}
             </div>
 
-            <div className="flex items-center justify-center gap-6 pt-2 font-mono text-xs text-slate-500">
+            <div className="flex items-center justify-center gap-6 pt-2 font-mono text-xs text-slate-500 dark:text-neutral-400">
               <div className="flex items-center gap-1.5">
-                <span className="w-3 h-3 rounded bg-blue-600" />
+                <span className="w-3 h-3 rounded bg-indigo-600" />
                 <span>CPU Compute Load</span>
               </div>
               <div className="flex items-center gap-1.5">
-                <span className="w-3 h-3 rounded bg-slate-300" />
+                <span className="w-3 h-3 rounded bg-slate-300 dark:bg-neutral-700" />
                 <span>Memory Allocated (RSS)</span>
               </div>
             </div>
           </div>
 
           {/* CHART D: Throughput & Error Dual-Axis - DYNAMICALLY PLOTTED */}
-          <div className="min-w-0 rounded-2xl border border-slate-200/70 bg-white p-5 shadow-[0_10px_28px_rgba(15,23,42,0.04)] sm:p-6 flex flex-col justify-between">
+          <div className="min-w-0 rounded-2xl border border-slate-200/70 dark:border-neutral-800 bg-white dark:bg-[#151515] p-5 shadow-[0_10px_28px_rgba(15,23,42,0.04)] sm:p-6 flex flex-col justify-between">
             <div className="flex items-center justify-between mb-3">
               <div>
-                <h3 className="font-bold text-slate-900 text-sm">Throughput vs Transient Errors</h3>
-                <span className="text-xs text-slate-500">System stability and error occurrence verification</span>
+                <h3 className="font-bold text-slate-900 dark:text-neutral-100 text-sm">Throughput vs Transient Errors</h3>
+                <span className="text-xs text-slate-500 dark:text-neutral-400">System stability and error occurrence verification</span>
               </div>
-              <span className="px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 font-mono text-xs font-bold border border-emerald-200">
+              <span className="px-2 py-0.5 rounded bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 font-mono text-xs font-bold border border-emerald-200 dark:border-emerald-800">
                 SLO: 99.9% TARGET
               </span>
             </div>
@@ -1279,7 +1299,7 @@ export const InferenceMonitoringPage: React.FC = () => {
                 <path
                   d={generateChartPath(historyThroughput, 500, 180, 40, 40, 30, 40, 20)}
                   fill="none"
-                  stroke="#7695E8"
+                  stroke="#4f46e5"
                   strokeLinecap="round"
                   strokeLinejoin="round"
                   strokeWidth="2"
@@ -1294,9 +1314,9 @@ export const InferenceMonitoringPage: React.FC = () => {
               </svg>
             </div>
 
-            <div className="flex items-center justify-center gap-6 pt-2 font-mono text-xs text-slate-500">
+            <div className="flex items-center justify-center gap-6 pt-2 font-mono text-xs text-slate-500 dark:text-neutral-400">
               <div className="flex items-center gap-1.5">
-                <span className="w-3 h-0.5 bg-blue-600" />
+                <span className="w-3 h-0.5 bg-indigo-600" />
                 <span>Throughput (req/s)</span>
               </div>
               <div className="flex items-center gap-1.5">
@@ -1369,35 +1389,35 @@ export const InferenceMonitoringPage: React.FC = () => {
               <tbody className="font-mono divide-y divide-slate-100">
                 {filteredEvents.length > 0 ? (
                   filteredEvents.map((row, idx) => (
-                    <tr key={idx} className="hover:bg-slate-50 transition-colors">
-                      <td className="py-2 px-3 text-slate-500">{row.timestamp}</td>
-                      <td className="py-2 px-3 font-semibold text-blue-600">{row.request_id}</td>
+                    <tr key={idx} className="hover:bg-slate-50 dark:hover:bg-neutral-800/50 transition-colors">
+                      <td className="py-2 px-3 text-slate-500 dark:text-neutral-400">{row.timestamp}</td>
+                      <td className="py-2 px-3 font-semibold text-indigo-600 dark:text-indigo-400">{row.request_id}</td>
                       <td className="py-2 px-3">
-                        <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-800 font-bold">
+                        <span className="px-1.5 py-0.5 rounded bg-slate-100 dark:bg-neutral-800 text-slate-800 dark:text-neutral-200 font-bold">
                           {row.assigned_pod}
                         </span>
                       </td>
-                      <td className="py-2 px-3 text-slate-500 text-[11px]">
+                      <td className="py-2 px-3 text-slate-500 dark:text-neutral-400 text-[11px]">
                         {row.replica_id}
                       </td>
-                      <td className="py-2 px-3 text-slate-600 font-sans text-xs">
+                      <td className="py-2 px-3 text-slate-600 dark:text-neutral-300 font-sans text-xs">
                         {row.traffic_type === 'locust_dashboard'
                           ? 'Dashboard Locust'
                           : row.traffic_type === 'test'
                             ? 'Manual test'
                             : row.traffic_type || 'Pod telemetry'}
                       </td>
-                      <td className="py-2 px-3 text-slate-600 font-sans text-xs">
+                      <td className="py-2 px-3 text-slate-600 dark:text-neutral-300 font-sans text-xs">
                         {row.routing_mechanism || 'Native K8s Service (L4 iptables)'}
                       </td>
-                      <td className="py-2 px-3 text-slate-900 font-semibold">
+                      <td className="py-2 px-3 text-slate-900 dark:text-neutral-100 font-semibold">
                         {row.observed_latency_ms} ms
                       </td>
                       <td className="py-2 px-3 text-right">
                         <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
                           row.http_status.includes('200')
-                            ? 'bg-emerald-50 text-emerald-700'
-                            : 'bg-red-50 text-red-700'
+                            ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300'
+                            : 'bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300'
                         }`}>
                           {row.http_status}
                         </span>
@@ -1406,7 +1426,7 @@ export const InferenceMonitoringPage: React.FC = () => {
                   ))
                 ) : (
                   <tr>
-                    <td colSpan={8} className="py-8 text-center text-slate-400 font-sans">
+                    <td colSpan={8} className="py-8 text-center text-slate-400 dark:text-neutral-500 font-sans">
                       {searchFilter || statusFilter !== 'ALL'
                         ? 'No events match your filter criteria.'
                         : 'No requests observed in current window. Click "Send Test Traffic" above to generate live inference activity.'}
@@ -1418,103 +1438,94 @@ export const InferenceMonitoringPage: React.FC = () => {
           </div>
 
           {/* Footer of log table */}
-          <div className="flex flex-wrap items-center justify-between pt-3 mt-3 border-t border-slate-100 text-xs text-slate-500">
+          <div className="flex flex-wrap items-center justify-between pt-3 mt-3 border-t border-slate-100 dark:border-neutral-800 text-xs text-slate-500 dark:text-neutral-400">
             <div className="flex items-center gap-2">
               <span className="relative flex h-2 w-2">
                 {hasActiveTraffic && (
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-500 opacity-75" />
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-500 opacity-75" />
                 )}
-                <span className={`relative inline-flex rounded-full h-2 w-2 ${hasActiveTraffic ? 'bg-blue-600' : 'bg-slate-400'}`} />
+                <span className={`relative inline-flex rounded-full h-2 w-2 ${hasActiveTraffic ? 'bg-indigo-600' : 'bg-slate-400 dark:bg-neutral-600'}`} />
               </span>
               <span className="font-mono">
                 Showing {filteredEvents.length} events • Rate: {summary.throughput_rps} events/sec
               </span>
             </div>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={handleExportJson}
-                className="px-2.5 py-1 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium transition-colors"
-              >
-                Download JSON Logs
-              </button>
+            <div className="flex items-center gap-3 text-[11px] text-slate-500 dark:text-neutral-400 font-mono">
+              <span className="hidden sm:inline">Forwarding:</span>
+              <span className="px-2 py-0.5 rounded bg-slate-100 dark:bg-neutral-800 text-slate-700 dark:text-neutral-300">
+                prometheus:9090
+              </span>
+              <span className="px-2 py-0.5 rounded bg-slate-100 dark:bg-neutral-800 text-slate-700 dark:text-neutral-300">
+                grafana:3000
+              </span>
             </div>
           </div>
         </div>
-
-        <details className="group rounded-2xl border border-slate-200/70 bg-white shadow-sm">
-          <summary className="flex cursor-pointer list-none items-center justify-between gap-4 px-5 py-4 text-sm font-semibold text-slate-800">
-            <span>External metrics tools</span>
-            <span className="text-xs font-medium text-slate-500 transition-colors group-open:text-blue-700">Optional access</span>
-          </summary>
-          <div className="grid gap-3 border-t border-slate-100 px-5 py-4 text-xs sm:grid-cols-2">
-            <div className="min-w-0 rounded-xl bg-slate-50 p-3">
-              <p className="mb-1 font-medium text-slate-600">Prometheus</p>
-              <code className="block break-all font-mono text-slate-700">kubectl port-forward -n mlops svc/prometheus 9090:9090</code>
-            </div>
-            <div className="min-w-0 rounded-xl bg-slate-50 p-3">
-              <p className="mb-1 font-medium text-slate-600">Grafana</p>
-              <code className="block break-all font-mono text-slate-700">kubectl port-forward -n mlops svc/grafana 3000:3000</code>
-            </div>
-          </div>
-        </details>
       </div>
 
       {/* ==================== INSPECT REPLICA MODAL ==================== */}
       {selectedReplicaModal && (
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-xl shadow-xl max-w-lg w-full border border-slate-200 overflow-hidden">
-            <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
+          <div className="bg-white dark:bg-[#151515] rounded-xl shadow-xl max-w-lg w-full border border-slate-200 dark:border-neutral-800 overflow-hidden">
+            <div className="px-5 py-4 border-b border-slate-200 dark:border-neutral-800 flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <Server size={18} className="text-blue-600" />
-                <h3 className="font-bold text-sm text-slate-900">
+                <Server size={18} className="text-indigo-600 dark:text-indigo-400" />
+                <h3 className="font-bold text-sm text-slate-900 dark:text-neutral-100">
                   Pod Diagnostics: {selectedReplicaModal.name}
                 </h3>
               </div>
               <button
                 onClick={() => setSelectedReplicaModal(null)}
-                className="text-slate-400 hover:text-slate-700 font-bold"
+                className="text-slate-400 hover:text-slate-700 dark:hover:text-neutral-200 font-bold"
               >
                 ✕
               </button>
             </div>
             <div className="p-5 space-y-3 font-mono text-xs">
-              <div className="flex justify-between p-2 rounded bg-slate-50 border border-slate-100">
-                <span className="text-slate-500">Replica Hostname</span>
-                <span className="font-bold text-slate-900">{selectedReplicaModal.replica_id}</span>
+              <div className="flex justify-between p-2 rounded bg-slate-50 dark:bg-neutral-900 border border-slate-100 dark:border-neutral-800">
+                <span className="text-slate-500 dark:text-neutral-400">Replica Hostname</span>
+                <span className="font-bold text-slate-900 dark:text-neutral-100">{selectedReplicaModal.replica_id}</span>
               </div>
-              <div className="flex justify-between p-2 rounded bg-slate-50 border border-slate-100">
-                <span className="text-slate-500">Pod IP Address</span>
-                <span className="font-bold text-slate-900">{selectedReplicaModal.pod_ip}:8000</span>
+              <div className="flex justify-between p-2 rounded bg-slate-50 dark:bg-neutral-900 border border-slate-100 dark:border-neutral-800">
+                <span className="text-slate-500 dark:text-neutral-400">Pod IP Address</span>
+                <span className="font-bold text-slate-900 dark:text-neutral-100">{selectedReplicaModal.pod_ip}:8000</span>
               </div>
-              <div className="flex justify-between p-2 rounded bg-slate-50 border border-slate-100">
-                <span className="text-slate-500">Health Readiness Probe</span>
-                <span className="text-emerald-600 font-bold">HTTP 200 OK (/ready)</span>
+              <div className="flex justify-between p-2 rounded bg-slate-50 dark:bg-neutral-900 border border-slate-100 dark:border-neutral-800">
+                <span className="text-slate-500 dark:text-neutral-400">Health Readiness Probe</span>
+                <span className="text-emerald-600 dark:text-emerald-400 font-bold">HTTP 200 OK (/ready)</span>
               </div>
-              <div className="flex justify-between p-2 rounded bg-slate-50 border border-slate-100">
-                <span className="text-slate-500">Requests Served</span>
-                <span className="font-bold text-slate-900">{selectedReplicaModal.requests_served} total</span>
+              <div className="flex justify-between p-2 rounded bg-slate-50 dark:bg-neutral-900 border border-slate-100 dark:border-neutral-800">
+                <span className="text-slate-500 dark:text-neutral-400">Requests Served</span>
+                <span className="font-bold text-slate-900 dark:text-neutral-100">{selectedReplicaModal.requests_served} total</span>
               </div>
-              <div className="flex justify-between p-2 rounded bg-slate-50 border border-slate-100">
-                <span className="text-slate-500">CPU Core Usage (K8s Metrics Server)</span>
-                <span className="font-bold text-slate-900">
+              <div className="flex justify-between p-2 rounded bg-slate-50 dark:bg-neutral-900 border border-slate-100 dark:border-neutral-800">
+                <span className="text-slate-500 dark:text-neutral-400">CPU Core Usage (K8s Metrics Server)</span>
+                <span className="font-bold text-slate-900 dark:text-neutral-100">
                   {selectedReplicaModal.cpu_pct != null ? `${selectedReplicaModal.cpu_raw} (${selectedReplicaModal.cpu_pct.toFixed(1)}%)` : 'N/A'}
                 </span>
               </div>
-              <div className="flex justify-between p-2 rounded bg-slate-50 border border-slate-100">
-                <span className="text-slate-500">Memory RSS Usage (K8s Metrics Server)</span>
-                <span className="font-bold text-slate-900">
+              <div className="flex justify-between p-2 rounded bg-slate-50 dark:bg-neutral-900 border border-slate-100 dark:border-neutral-800">
+                <span className="text-slate-500 dark:text-neutral-400">Memory RSS Usage (K8s Metrics Server)</span>
+                <span className="font-bold text-slate-900 dark:text-neutral-100">
                   {selectedReplicaModal.mem_pct != null ? `${selectedReplicaModal.mem_raw} (${selectedReplicaModal.mem_pct.toFixed(1)}%)` : 'N/A'}
                 </span>
               </div>
-              <div className="flex justify-between p-2 rounded bg-slate-50 border border-slate-100">
-                <span className="text-slate-500">Benchmark Score (Preview)</span>
-                <span className="font-bold text-blue-600">{selectedReplicaModal.score.toFixed(3)}</span>
+              <div className="flex justify-between p-2 rounded bg-slate-50 dark:bg-neutral-900 border border-slate-100 dark:border-neutral-800">
+                <span className="text-slate-500 dark:text-neutral-400">Gateway Adaptive Score (latest decision)</span>
+                <span className="font-bold text-violet-700 dark:text-violet-400">
+                  {selectedReplicaModal.gateway_score != null ? selectedReplicaModal.gateway_score.toFixed(3) : 'No Adaptive decision yet'}
+                  {selectedReplicaModal.gateway_selected ? ' · LAST SELECTED' : ''}
+                </span>
+              </div>
+              <div className="flex justify-between p-2 rounded bg-slate-50 dark:bg-neutral-900 border border-slate-100 dark:border-neutral-800">
+                <span className="text-slate-500 dark:text-neutral-400">Benchmark Score (Preview)</span>
+                <span className="font-bold text-indigo-600 dark:text-indigo-400">{selectedReplicaModal.score.toFixed(3)}</span>
               </div>
             </div>
-            <div className="px-5 py-3 bg-slate-50 border-t border-slate-200 flex justify-end">
+            <div className="px-5 py-3 bg-slate-50 dark:bg-neutral-900 border-t border-slate-200 dark:border-neutral-800 flex justify-end">
               <button
                 onClick={() => setSelectedReplicaModal(null)}
-                className="px-4 py-1.5 rounded-lg bg-blue-600 text-white text-xs font-medium hover:bg-blue-700"
+                className="px-4 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-medium hover:bg-indigo-700"
               >
                 Close
               </button>

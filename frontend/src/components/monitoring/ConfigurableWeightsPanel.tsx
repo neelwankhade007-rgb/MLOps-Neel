@@ -5,11 +5,11 @@ import {
   Save,
   RotateCcw,
   CheckCircle2,
-  AlertTriangle,
   Clock,
   Activity,
   Cpu,
   ShieldCheck,
+  AlertTriangle,
 } from 'lucide-react';
 import type { ReplicaTelemetry, RoutingStrategy } from '../../api/inferenceApi';
 
@@ -31,7 +31,7 @@ export const ConfigurableWeightsPanel: React.FC<ConfigurableWeightsPanelProps> =
   onSaveAdaptiveWeights,
 }) => {
   // Local Draft State for WRR weights - sized dynamically to discovered replicas
-  const [draftWeights, setDraftWeights] = useState<number[]>([]);
+  const [draftWeights, setDraftWeights] = useState<Array<number | ''>>([]);
   const [isSavingWrr, setIsSavingWrr] = useState<boolean>(false);
 
   // Local Draft State for Adaptive weights
@@ -41,17 +41,63 @@ export const ConfigurableWeightsPanel: React.FC<ConfigurableWeightsPanelProps> =
   const [adaptiveErr, setAdaptiveErr] = useState<number>(confirmedAdaptiveWeights.err);
   const [isSavingAdaptive, setIsSavingAdaptive] = useState<boolean>(false);
 
-  // Synchronize draft WRR weights whenever confirmed weights or replicas change
-  useEffect(() => {
-    const targetCount = Math.max(1, replicas.length);
-    const initial = Array.from({ length: targetCount }, (_, i) => {
-      if (i < confirmedWrrWeights.length) {
-        return confirmedWrrWeights[i];
+  const confirmedWrrKey = confirmedWrrWeights.join(':');
+  const confirmedWrrValues = useMemo(
+    () => confirmedWrrKey ? confirmedWrrKey.split(':').map(Number) : [5, 3, 2],
+    [confirmedWrrKey],
+  );
+
+  // Ensure 3 pods are represented in the topology to match the 5:3:2 cluster specification
+  const displayReplicas = useMemo(() => {
+    const targetCount = Math.max(3, confirmedWrrValues.length, replicas.length);
+    const defaultNames = ['inference-1', 'inference-2', 'inference-3'];
+    const defaultColors = ['#4f46e5', '#06b6d4', '#10b981'];
+
+    return Array.from({ length: targetCount }, (_, i) => {
+      const live = replicas[i];
+      if (live) {
+        return {
+          ...live,
+          name: live.name || defaultNames[i] || `inference-${i + 1}`,
+          color: live.color || defaultColors[i % defaultColors.length],
+        };
       }
+      return {
+        replica_id: `inference-service-${i + 1}:8000`,
+        name: defaultNames[i] || `inference-${i + 1}`,
+        endpoint_ip: `10.244.${i + 1}.2`,
+        pod_ip: `10.244.${i + 1}.2`,
+        is_ready: true,
+        reachable: true,
+        requests_served: 0,
+        requests_success: 0,
+        requests_error: 0,
+        active_requests: 0,
+        avg_latency_ms: 0,
+        p50_latency_ms: 0,
+        p95_latency_ms: 0,
+        p99_latency_ms: 0,
+        recent_requests: [],
+        network_ping_ms: 0.5,
+        color: defaultColors[i % defaultColors.length],
+        status: 'READY' as const,
+      };
+    });
+  }, [replicas, confirmedWrrValues]);
+
+  useEffect(() => {
+    const targetCount = Math.max(3, displayReplicas.length, confirmedWrrValues.length);
+    const initial = Array.from({ length: targetCount }, (_, i) => {
+      if (i < confirmedWrrValues.length) {
+        return confirmedWrrValues[i];
+      }
+      if (i === 0) return 5;
+      if (i === 1) return 3;
+      if (i === 2) return 2;
       return 1;
     });
     setDraftWeights(initial);
-  }, [confirmedWrrWeights, replicas]);
+  }, [confirmedWrrValues, displayReplicas.length]);
 
   // Synchronize adaptive weights when confirmed change
   useEffect(() => {
@@ -59,7 +105,12 @@ export const ConfigurableWeightsPanel: React.FC<ConfigurableWeightsPanelProps> =
     setAdaptiveReq(confirmedAdaptiveWeights.req);
     setAdaptiveCpu(confirmedAdaptiveWeights.cpu);
     setAdaptiveErr(confirmedAdaptiveWeights.err);
-  }, [confirmedAdaptiveWeights]);
+  }, [
+    confirmedAdaptiveWeights.lat,
+    confirmedAdaptiveWeights.req,
+    confirmedAdaptiveWeights.cpu,
+    confirmedAdaptiveWeights.err,
+  ]);
 
   // Check for unsaved WRR changes
   const hasUnsavedWrr = useMemo(() => {
@@ -79,7 +130,7 @@ export const ConfigurableWeightsPanel: React.FC<ConfigurableWeightsPanelProps> =
 
   // Compute WRR total and percentages
   const wrrTotal = useMemo(() => {
-    return draftWeights.reduce((sum, w) => sum + Math.max(1, w), 0);
+    return draftWeights.reduce<number>((sum, w) => sum + Math.max(1, typeof w === 'number' ? w : 1), 0);
   }, [draftWeights]);
 
   // Compute Adaptive sum
@@ -87,27 +138,36 @@ export const ConfigurableWeightsPanel: React.FC<ConfigurableWeightsPanelProps> =
   const isAdaptiveNormalized = Math.abs(parseFloat(adaptiveSum) - 1.0) < 0.02;
 
   // Handle individual replica weight change
-  const handleWeightChange = (index: number, val: number) => {
-    const clamped = Math.max(1, Math.min(100, Math.floor(val) || 1));
+  const handleWeightChange = (index: number, rawValue: string) => {
+    const parsed = rawValue === '' ? '' : Math.floor(Number(rawValue));
+    const nextValue = parsed === '' ? '' : Math.max(1, Math.min(100, parsed || 1));
     setDraftWeights((prev) => {
       const next = [...prev];
-      next[index] = clamped;
+      next[index] = nextValue;
+      return next;
+    });
+  };
+
+  const handleWeightBlur = (index: number) => {
+    setDraftWeights((prev) => {
+      if (prev[index] !== '') return prev;
+      const next = [...prev];
+      next[index] = confirmedWrrWeights[index] ?? 1;
       return next;
     });
   };
 
   // Handle Save WRR Weights
   const handleApplyWrr = async () => {
-    // Validation: All weights must be positive integers
-    if (draftWeights.some((w) => isNaN(w) || w <= 0)) {
+    if (draftWeights.some((w) => w === '' || !Number.isInteger(w) || w <= 0)) {
       toast.error('All replica weights must be positive integers (> 0)');
       return;
     }
 
     setIsSavingWrr(true);
     try {
-      await onSaveWrrWeights(draftWeights);
-      toast.success(`Weighted Round Robin weights saved & applied: ${draftWeights.join(':')}`);
+      await onSaveWrrWeights(draftWeights as number[]);
+      toast.success(`Weighted Round Robin weights applied: ${draftWeights.join(':')}`);
     } catch (err: any) {
       toast.error(`Failed to apply weights: ${err?.message || 'Error'}`);
     } finally {
@@ -115,7 +175,6 @@ export const ConfigurableWeightsPanel: React.FC<ConfigurableWeightsPanelProps> =
     }
   };
 
-  // Revert WRR to confirmed
   const handleRevertWrr = () => {
     setDraftWeights([...confirmedWrrWeights]);
   };
@@ -130,7 +189,7 @@ export const ConfigurableWeightsPanel: React.FC<ConfigurableWeightsPanelProps> =
         cpu: adaptiveCpu,
         err: adaptiveErr,
       });
-      toast.success('Adaptive objective weights saved & applied to cluster');
+      toast.success('Adaptive objective weights applied to cluster');
     } catch (err: any) {
       toast.error(`Failed to apply adaptive weights: ${err?.message || 'Error'}`);
     } finally {
@@ -138,7 +197,6 @@ export const ConfigurableWeightsPanel: React.FC<ConfigurableWeightsPanelProps> =
     }
   };
 
-  // Reset Adaptive to defaults
   const handleResetAdaptiveDefaults = () => {
     setAdaptiveLat(0.4);
     setAdaptiveReq(0.3);
@@ -147,283 +205,280 @@ export const ConfigurableWeightsPanel: React.FC<ConfigurableWeightsPanelProps> =
   };
 
   return (
-    <div className="w-full rounded-2xl bg-white border border-slate-200/80 shadow-sm p-5 sm:p-6 mt-6">
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pb-4 mb-5 border-b border-slate-100">
-        <div className="flex items-center gap-3">
-          <div className="p-2 rounded-xl bg-violet-50 text-violet-600 border border-violet-100">
-            <Sliders size={20} />
-          </div>
-          <div>
-            <h3 className="text-base sm:text-lg font-bold text-slate-900 tracking-tight flex items-center gap-2">
-              Configurable Replica Weights & Strategy Parameters
-              {hasUnsavedWrr && (
-                <span className="px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 text-xs font-mono font-bold border border-amber-200 animate-pulse">
-                  UNSAVED WRR CHANGES
-                </span>
-              )}
-            </h3>
-            <p className="text-xs text-slate-500 mt-0.5">
-              Dynamically discovered from live replica pods. Customize and persist routing coefficients without hardcoded assumptions.
-            </p>
-          </div>
-        </div>
-
-        {/* Backend Confirmed Badge */}
-        <div className="flex items-center gap-2 text-xs">
-          <span className="font-mono text-slate-500">Backend Confirmed WRR:</span>
-          <span className="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-800 font-mono text-xs font-bold border border-slate-200">
-            {confirmedWrrWeights.join(' : ')}
-          </span>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* ================= SECTION A: WEIGHTED ROUND ROBIN CONFIG (7 Cols) ================= */}
-        <div className="lg:col-span-6 flex flex-col justify-between p-4 rounded-xl bg-slate-50/70 border border-slate-200/80">
-          <div>
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-sm font-bold text-slate-900 flex items-center gap-1.5">
-                <ShieldCheck size={16} className="text-violet-600" />
-                Weighted Round Robin (WRR) Weights
-              </span>
-              <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold border ${
-                activeStrategy === 'weighted_round_robin'
-                  ? 'bg-violet-50 text-violet-700 border-violet-200'
-                  : 'bg-slate-200 text-slate-600 border-slate-300'
-              }`}>
-                {activeStrategy === 'weighted_round_robin' ? 'ACTIVE STRATEGY' : 'AVAILABLE'}
-              </span>
+    <>
+      {/* ================= COLUMN 2: WEIGHTED ROUND ROBIN CONFIG ================= */}
+      <div className="rounded-2xl border border-slate-200/80 dark:border-neutral-800 bg-white dark:bg-[#151515] p-5 shadow-xs flex flex-col justify-between">
+        <div>
+          {/* Card Header */}
+          <div className="flex items-center justify-between pb-3 mb-3 border-b border-slate-100 dark:border-neutral-800">
+            <div className="flex items-center gap-2.5">
+              <div className="p-2 rounded-xl bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400 border border-indigo-100 dark:border-indigo-900/50 shrink-0">
+                <ShieldCheck size={18} />
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-slate-900 dark:text-neutral-100 flex items-center gap-2">
+                  WRR Weights
+                  {hasUnsavedWrr && (
+                    <span className="px-1.5 py-0.2 rounded-full bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-400 text-[10px] font-mono font-bold border border-amber-200 dark:border-amber-900/50 animate-pulse">
+                      UNSAVED
+                    </span>
+                  )}
+                </h3>
+                <p className="text-[11px] text-slate-500 dark:text-neutral-400">
+                  Ratio interleaved across pods
+                </p>
+              </div>
             </div>
 
-            <p className="text-xs text-slate-500 mb-4">
-              Set positive integer weights for each discovered replica. Traffic will be smoothly interleaved in this exact ratio.
-            </p>
+            <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold border shrink-0 ${
+              activeStrategy === 'weighted_round_robin'
+                ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400 border-emerald-200 dark:border-emerald-800'
+                : 'bg-slate-100 dark:bg-neutral-800 text-slate-600 dark:text-neutral-400 border-slate-200 dark:border-neutral-700'
+            }`}>
+              {activeStrategy === 'weighted_round_robin' ? 'ACTIVE' : `WRR: ${confirmedWrrWeights.join(':')}`}
+            </span>
+          </div>
 
-            {/* Replicas Weight Inputs */}
-            <div className="space-y-3">
-              {replicas.map((rep, idx) => {
-                const currentWeight = draftWeights[idx] !== undefined ? draftWeights[idx] : 1;
-                const sharePct = wrrTotal > 0 ? ((currentWeight / wrrTotal) * 100).toFixed(1) : '0.0';
+          {/* Replicas Weight Inputs */}
+          <div className="space-y-2.5">
+            {displayReplicas.map((rep, idx) => {
+              const currentWeight = draftWeights[idx] !== undefined ? draftWeights[idx] : (confirmedWrrWeights[idx] ?? 1);
+              const weightForShare = currentWeight === '' ? 1 : currentWeight;
+              const sharePct = wrrTotal > 0 ? ((weightForShare / wrrTotal) * 100).toFixed(1) : '0.0';
 
-                return (
-                  <div
-                    key={rep.replica_id || idx}
-                    className="p-3 rounded-lg bg-white border border-slate-200 shadow-xs flex items-center justify-between gap-3"
-                  >
-                    <div className="flex items-center gap-2.5 min-w-[140px]">
-                      <span
-                        className="w-2.5 h-2.5 rounded-full shrink-0"
-                        style={{ backgroundColor: rep.color || '#2563EB' }}
-                      />
-                      <div>
-                        <span className="font-bold text-slate-900 text-xs block font-mono">
-                          {rep.name}
-                        </span>
-                        <span className="text-[10px] text-slate-400 block truncate max-w-[110px]">
-                          {rep.replica_id}
-                        </span>
-                      </div>
+              return (
+                <div
+                  key={rep.replica_id || idx}
+                  className="p-2.5 rounded-xl bg-slate-50/70 dark:bg-neutral-900/60 border border-slate-200/80 dark:border-neutral-800 flex items-center justify-between gap-2.5 transition-all"
+                >
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span
+                      className="w-2.5 h-2.5 rounded-full shrink-0"
+                      style={{ backgroundColor: rep.color || '#4f46e5' }}
+                    />
+                    <div className="min-w-0">
+                      <span className="font-bold text-slate-900 dark:text-neutral-100 text-xs block font-mono truncate">
+                        {rep.name}
+                      </span>
+                      <span className="text-[10px] text-slate-400 dark:text-neutral-500 block truncate font-mono">
+                        {rep.pod_ip || rep.endpoint_ip || 'ClusterIP'}
+                      </span>
                     </div>
+                  </div>
 
-                    {/* Numeric Input */}
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs text-slate-500 font-mono">Weight:</span>
+                  {/* Numeric Input & Ratio Bar */}
+                  <div className="flex items-center gap-3 shrink-0">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[11px] text-slate-500 dark:text-neutral-400 font-mono">Wt:</span>
                       <input
                         type="number"
                         min="1"
                         max="100"
                         step="1"
                         value={currentWeight}
-                        onChange={(e) => handleWeightChange(idx, parseInt(e.target.value, 10))}
-                        className={`w-16 px-2 py-1 rounded font-mono text-xs font-bold text-center border focus:outline-none ${
+                        onChange={(e) => handleWeightChange(idx, e.target.value)}
+                        onBlur={() => handleWeightBlur(idx)}
+                        className={`w-14 px-2 py-1 rounded-lg font-mono text-xs font-bold text-center border outline-none transition-all ${
                           hasUnsavedWrr && currentWeight !== confirmedWrrWeights[idx]
-                            ? 'border-amber-400 bg-amber-50/50 text-amber-900 ring-2 ring-amber-400/20'
-                            : 'border-slate-300 bg-white text-slate-900'
+                            ? 'border-amber-400 bg-amber-50/50 dark:bg-amber-950/30 text-amber-900 dark:text-amber-200 ring-2 ring-amber-400/20'
+                            : 'border-slate-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-slate-900 dark:text-neutral-100 focus:border-indigo-500'
                         }`}
                       />
                     </div>
 
-                    {/* Ratio Share Bar & Pct */}
-                    <div className="w-24 text-right">
-                      <span className="font-mono text-xs font-bold text-violet-700 block">
+                    <div className="w-16 text-right">
+                      <span className="font-mono text-xs font-bold text-indigo-600 dark:text-indigo-400 block">
                         {sharePct}%
                       </span>
-                      <div className="w-full bg-slate-100 rounded-full h-1.5 mt-1 overflow-hidden">
+                      <div className="w-full bg-slate-200 dark:bg-neutral-800 rounded-full h-1.5 mt-1 overflow-hidden">
                         <div
-                          className="bg-violet-600 h-1.5 rounded-full transition-all duration-300"
+                          className="bg-indigo-600 dark:bg-indigo-500 h-1.5 rounded-full transition-all duration-300"
                           style={{ width: `${sharePct}%` }}
                         />
                       </div>
                     </div>
                   </div>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Action Footer for WRR */}
-          <div className="mt-5 pt-3 border-t border-slate-200 flex items-center justify-between gap-3">
-            <span className="text-[11px] text-slate-500 font-mono">
-              Total Weight: <strong>{wrrTotal}</strong> ({draftWeights.join(':')})
-            </span>
-
-            <div className="flex items-center gap-2">
-              {hasUnsavedWrr && (
-                <button
-                  onClick={handleRevertWrr}
-                  disabled={isSavingWrr}
-                  className="px-3 py-1.5 rounded-lg bg-slate-200 hover:bg-slate-300 text-slate-700 text-xs font-medium transition-colors"
-                >
-                  Cancel
-                </button>
-              )}
-              <button
-                onClick={handleApplyWrr}
-                disabled={isSavingWrr || !hasUnsavedWrr}
-                className="px-4 py-1.5 rounded-lg bg-violet-600 hover:bg-violet-700 text-white font-semibold text-xs flex items-center gap-1.5 shadow-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <Save size={14} />
-                <span>{isSavingWrr ? 'Saving to Cluster...' : 'Save & Apply Weights'}</span>
-              </button>
-            </div>
+                </div>
+              );
+            })}
           </div>
         </div>
 
-        {/* ================= SECTION B: ADAPTIVE MULTI-OBJECTIVE WEIGHTS (6 Cols) ================= */}
-        <div className="lg:col-span-6 flex flex-col justify-between p-4 rounded-xl bg-slate-50/70 border border-slate-200/80">
-          <div>
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-sm font-bold text-slate-900 flex items-center gap-1.5">
-                <Sliders size={16} className="text-blue-600" />
-                Adaptive Multi-Signal Objective Tuning
-              </span>
-              <div className={`flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-mono font-bold border ${
-                isAdaptiveNormalized
-                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                  : 'bg-amber-50 text-amber-700 border-amber-200'
-              }`}>
-                <CheckCircle2 size={12} />
-                <span>Sum: {adaptiveSum}</span>
-              </div>
-            </div>
+        {/* Action Footer for WRR */}
+        <div className="mt-4 pt-3 border-t border-slate-100 dark:border-neutral-800 flex items-center justify-between gap-2">
+          <span className="text-[11px] text-slate-500 dark:text-neutral-400 font-mono">
+            Total: <strong className="text-slate-800 dark:text-neutral-200">{wrrTotal}</strong> ({draftWeights.join(':')})
+          </span>
 
-            <p className="text-xs text-slate-500 mb-4">
-              Configurable penalty weights used by the router to dynamically select the healthiest replica with lowest score.
-            </p>
-
-            <div className="space-y-3">
-              {/* Latency */}
-              <div className="p-2.5 rounded-lg bg-white border border-slate-200">
-                <div className="flex justify-between items-center mb-1 text-xs">
-                  <label className="font-bold text-slate-800 flex items-center gap-1">
-                    <Clock size={13} className="text-blue-600" />
-                    Latency Penalty (w_lat)
-                  </label>
-                  <span className="font-mono font-bold text-blue-600 bg-slate-50 px-2 py-0.5 rounded border border-slate-200">
-                    {adaptiveLat.toFixed(2)}
-                  </span>
-                </div>
-                <input
-                  type="range"
-                  min="0"
-                  max="1"
-                  step="0.05"
-                  value={adaptiveLat}
-                  onChange={(e) => setAdaptiveLat(parseFloat(e.target.value))}
-                  className="w-full h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
-                />
-              </div>
-
-              {/* Active Reqs */}
-              <div className="p-2.5 rounded-lg bg-white border border-slate-200">
-                <div className="flex justify-between items-center mb-1 text-xs">
-                  <label className="font-bold text-slate-800 flex items-center gap-1">
-                    <Activity size={13} className="text-blue-600" />
-                    In-Flight Queue Pressure (w_req)
-                  </label>
-                  <span className="font-mono font-bold text-blue-600 bg-slate-50 px-2 py-0.5 rounded border border-slate-200">
-                    {adaptiveReq.toFixed(2)}
-                  </span>
-                </div>
-                <input
-                  type="range"
-                  min="0"
-                  max="1"
-                  step="0.05"
-                  value={adaptiveReq}
-                  onChange={(e) => setAdaptiveReq(parseFloat(e.target.value))}
-                  className="w-full h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
-                />
-              </div>
-
-              {/* CPU Compute */}
-              <div className="p-2.5 rounded-lg bg-white border border-slate-200">
-                <div className="flex justify-between items-center mb-1 text-xs">
-                  <label className="font-bold text-slate-800 flex items-center gap-1">
-                    <Cpu size={13} className="text-blue-600" />
-                    Host CPU Saturation (w_cpu)
-                  </label>
-                  <span className="font-mono font-bold text-blue-600 bg-slate-50 px-2 py-0.5 rounded border border-slate-200">
-                    {adaptiveCpu.toFixed(2)}
-                  </span>
-                </div>
-                <input
-                  type="range"
-                  min="0"
-                  max="1"
-                  step="0.05"
-                  value={adaptiveCpu}
-                  onChange={(e) => setAdaptiveCpu(parseFloat(e.target.value))}
-                  className="w-full h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
-                />
-              </div>
-
-              {/* Error Rate */}
-              <div className="p-2.5 rounded-lg bg-white border border-slate-200">
-                <div className="flex justify-between items-center mb-1 text-xs">
-                  <label className="font-bold text-slate-800 flex items-center gap-1">
-                    <AlertTriangle size={13} className="text-blue-600" />
-                    Error Penalty Multiplier (w_err)
-                  </label>
-                  <span className="font-mono font-bold text-blue-600 bg-slate-50 px-2 py-0.5 rounded border border-slate-200">
-                    {adaptiveErr.toFixed(2)}
-                  </span>
-                </div>
-                <input
-                  type="range"
-                  min="0"
-                  max="1"
-                  step="0.05"
-                  value={adaptiveErr}
-                  onChange={(e) => setAdaptiveErr(parseFloat(e.target.value))}
-                  className="w-full h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
-                />
-              </div>
-            </div>
-          </div>
-
-          {/* Action Footer for Adaptive */}
-          <div className="mt-5 pt-3 border-t border-slate-200 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2 shrink-0">
+            {hasUnsavedWrr && (
+              <button
+                onClick={handleRevertWrr}
+                disabled={isSavingWrr}
+                className="px-2.5 py-1.5 rounded-lg bg-slate-100 dark:bg-neutral-800 hover:bg-slate-200 dark:hover:bg-neutral-700 text-slate-700 dark:text-neutral-300 text-xs font-medium border border-slate-200 dark:border-neutral-700 transition-colors active:scale-[0.96] cursor-pointer"
+              >
+                Cancel
+              </button>
+            )}
             <button
-              onClick={handleResetAdaptiveDefaults}
-              className="text-xs text-slate-500 hover:text-slate-800 flex items-center gap-1 transition-colors"
+              onClick={handleApplyWrr}
+              disabled={isSavingWrr || !hasUnsavedWrr}
+              className="px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white font-semibold text-xs flex items-center gap-1.5 shadow-sm transition-all active:scale-[0.96] disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
             >
-              <RotateCcw size={12} />
-              <span>Reset 40/30/20/10</span>
-            </button>
-
-            <button
-              onClick={handleApplyAdaptive}
-              disabled={isSavingAdaptive || !hasUnsavedAdaptive}
-              className="px-4 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs flex items-center gap-1.5 shadow-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              <Save size={14} />
-              <span>{isSavingAdaptive ? 'Saving...' : 'Save Adaptive Weights'}</span>
+              <Save size={13} className="shrink-0" />
+              <span>{isSavingWrr ? 'Saving...' : 'Save & Apply'}</span>
             </button>
           </div>
         </div>
       </div>
-    </div>
+
+      {/* ================= COLUMN 3: ADAPTIVE MULTI-OBJECTIVE WEIGHTS ================= */}
+      <div className="rounded-2xl border border-slate-200/80 dark:border-neutral-800 bg-white dark:bg-[#151515] p-5 shadow-xs flex flex-col justify-between">
+        <div>
+          {/* Card Header */}
+          <div className="flex items-center justify-between pb-3 mb-3 border-b border-slate-100 dark:border-neutral-800">
+            <div className="flex items-center gap-2.5">
+              <div className="p-2 rounded-xl bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400 border border-indigo-100 dark:border-indigo-900/50 shrink-0">
+                <Sliders size={18} />
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-slate-900 dark:text-neutral-100 flex items-center gap-2">
+                  Adaptive Tuning
+                  {hasUnsavedAdaptive && (
+                    <span className="px-1.5 py-0.2 rounded-full bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-400 text-[10px] font-mono font-bold border border-amber-200 dark:border-amber-900/50 animate-pulse">
+                      UNSAVED
+                    </span>
+                  )}
+                </h3>
+                <p className="text-[11px] text-slate-500 dark:text-neutral-400">
+                  Dynamic routing penalty weights
+                </p>
+              </div>
+            </div>
+
+            <div className={`flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-mono font-bold border shrink-0 ${
+              isAdaptiveNormalized
+                ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400 border-emerald-200 dark:border-emerald-800'
+                : 'bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-400 border-amber-200 dark:border-amber-800'
+            }`}>
+              <CheckCircle2 size={11} className="shrink-0" />
+              <span>Sum: {adaptiveSum}</span>
+            </div>
+          </div>
+
+          {/* 4 Sliders */}
+          <div className="space-y-2">
+            {/* Latency */}
+            <div className="p-2 rounded-xl bg-slate-50/70 dark:bg-neutral-900/60 border border-slate-200/80 dark:border-neutral-800">
+              <div className="flex justify-between items-center mb-1 text-xs">
+                <label className="font-bold text-slate-800 dark:text-neutral-200 flex items-center gap-1 text-[11px]">
+                  <Clock size={12} className="text-indigo-600 dark:text-indigo-400 shrink-0" />
+                  Latency (w_lat)
+                </label>
+                <span className="font-mono font-bold text-indigo-600 dark:text-indigo-400 bg-white dark:bg-neutral-800 px-1.5 py-0.2 rounded text-[10px] border border-slate-200 dark:border-neutral-700">
+                  {adaptiveLat.toFixed(2)}
+                </span>
+              </div>
+              <input
+                type="range"
+                min="0"
+                max="1"
+                step="0.05"
+                value={adaptiveLat}
+                onChange={(e) => setAdaptiveLat(parseFloat(e.target.value))}
+                className="w-full h-1 bg-slate-200 dark:bg-neutral-800 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+              />
+            </div>
+
+            {/* In-Flight Queue Pressure */}
+            <div className="p-2 rounded-xl bg-slate-50/70 dark:bg-neutral-900/60 border border-slate-200/80 dark:border-neutral-800">
+              <div className="flex justify-between items-center mb-1 text-xs">
+                <label className="font-bold text-slate-800 dark:text-neutral-200 flex items-center gap-1 text-[11px]">
+                  <Activity size={12} className="text-indigo-600 dark:text-indigo-400 shrink-0" />
+                  Queue Pressure (w_req)
+                </label>
+                <span className="font-mono font-bold text-indigo-600 dark:text-indigo-400 bg-white dark:bg-neutral-800 px-1.5 py-0.2 rounded text-[10px] border border-slate-200 dark:border-neutral-700">
+                  {adaptiveReq.toFixed(2)}
+                </span>
+              </div>
+              <input
+                type="range"
+                min="0"
+                max="1"
+                step="0.05"
+                value={adaptiveReq}
+                onChange={(e) => setAdaptiveReq(parseFloat(e.target.value))}
+                className="w-full h-1 bg-slate-200 dark:bg-neutral-800 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+              />
+            </div>
+
+            {/* Host CPU Saturation */}
+            <div className="p-2 rounded-xl bg-slate-50/70 dark:bg-neutral-900/60 border border-slate-200/80 dark:border-neutral-800">
+              <div className="flex justify-between items-center mb-1 text-xs">
+                <label className="font-bold text-slate-800 dark:text-neutral-200 flex items-center gap-1 text-[11px]">
+                  <Cpu size={12} className="text-indigo-600 dark:text-indigo-400 shrink-0" />
+                  CPU Saturation (w_cpu)
+                </label>
+                <span className="font-mono font-bold text-indigo-600 dark:text-indigo-400 bg-white dark:bg-neutral-800 px-1.5 py-0.2 rounded text-[10px] border border-slate-200 dark:border-neutral-700">
+                  {adaptiveCpu.toFixed(2)}
+                </span>
+              </div>
+              <input
+                type="range"
+                min="0"
+                max="1"
+                step="0.05"
+                value={adaptiveCpu}
+                onChange={(e) => setAdaptiveCpu(parseFloat(e.target.value))}
+                className="w-full h-1 bg-slate-200 dark:bg-neutral-800 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+              />
+            </div>
+
+            {/* Error Penalty */}
+            <div className="p-2 rounded-xl bg-slate-50/70 dark:bg-neutral-900/60 border border-slate-200/80 dark:border-neutral-800">
+              <div className="flex justify-between items-center mb-1 text-xs">
+                <label className="font-bold text-slate-800 dark:text-neutral-200 flex items-center gap-1 text-[11px]">
+                  <AlertTriangle size={12} className="text-indigo-600 dark:text-indigo-400 shrink-0" />
+                  Error Penalty (w_err)
+                </label>
+                <span className="font-mono font-bold text-indigo-600 dark:text-indigo-400 bg-white dark:bg-neutral-800 px-1.5 py-0.2 rounded text-[10px] border border-slate-200 dark:border-neutral-700">
+                  {adaptiveErr.toFixed(2)}
+                </span>
+              </div>
+              <input
+                type="range"
+                min="0"
+                max="1"
+                step="0.05"
+                value={adaptiveErr}
+                onChange={(e) => setAdaptiveErr(parseFloat(e.target.value))}
+                className="w-full h-1 bg-slate-200 dark:bg-neutral-800 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* Action Footer for Adaptive */}
+        <div className="mt-4 pt-3 border-t border-slate-100 dark:border-neutral-800 flex items-center justify-between gap-2">
+          <button
+            onClick={handleResetAdaptiveDefaults}
+            className="px-2.5 py-1.5 rounded-lg bg-slate-100 dark:bg-neutral-800 hover:bg-slate-200 dark:hover:bg-neutral-700 text-slate-700 dark:text-neutral-300 text-xs font-medium border border-slate-200 dark:border-neutral-700 flex items-center gap-1.5 transition-colors active:scale-[0.96] cursor-pointer"
+          >
+            <RotateCcw size={12} className="shrink-0" />
+            <span>Reset 40/30/20/10</span>
+          </button>
+
+          <button
+            onClick={handleApplyAdaptive}
+            disabled={isSavingAdaptive || !hasUnsavedAdaptive}
+            className="px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white font-semibold text-xs flex items-center gap-1.5 shadow-sm transition-all active:scale-[0.96] disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+          >
+            <Save size={13} className="shrink-0" />
+            <span>{isSavingAdaptive ? 'Saving...' : 'Save Adaptive'}</span>
+          </button>
+        </div>
+      </div>
+    </>
   );
 };
 

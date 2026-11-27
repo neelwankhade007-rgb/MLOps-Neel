@@ -36,7 +36,7 @@ export const GanttRequestTimeline: React.FC<GanttRequestTimelineProps> = ({
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [selectedEventModal, setSelectedEventModal] = useState<RecentEvent | null>(null);
 
-  const getEventEpoch = (event: RecentEvent): number | null => {
+  const getEventEpoch = (event: RecentEvent): number => {
     const explicitEpoch = Number(event.start_epoch_ms);
     if (Number.isFinite(explicitEpoch) && explicitEpoch > 0) return explicitEpoch;
 
@@ -47,13 +47,13 @@ export const GanttRequestTimeline: React.FC<GanttRequestTimelineProps> = ({
     // Some pod events contain only a clock time (HH:mm:ss.SSS), not an ISO date.
     const timeOnly = timestamp.match(/^(\d{1,2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?$/);
     if (timeOnly) {
-      const date = new Date();
-      date.setHours(Number(timeOnly[1]), Number(timeOnly[2]), Number(timeOnly[3]), Number((timeOnly[4] || '0').padEnd(3, '0')));
-      let epoch = date.getTime();
-      if (epoch > Date.now() + 60_000) epoch -= 24 * 60 * 60 * 1000;
-      return epoch;
+      const hours = Number(timeOnly[1]);
+      const minutes = Number(timeOnly[2]);
+      const seconds = Number(timeOnly[3]);
+      const ms = Number((timeOnly[4] || '0').padEnd(3, '0'));
+      return (hours * 3600 + minutes * 60 + seconds) * 1000 + ms;
     }
-    return null;
+    return 0;
   };
 
   // Filtered events bounded by windowSize
@@ -91,14 +91,12 @@ export const GanttRequestTimeline: React.FC<GanttRequestTimelineProps> = ({
   // Compute time window boundaries for Gantt projection
   const { minEpoch, timeSpanMs, eventEpochs } = useMemo(() => {
     if (filteredEvents.length === 0) {
-      const now = Date.now();
-      return { minEpoch: now - 10000, timeSpanMs: 10000, eventEpochs: new Map<RecentEvent, number>() };
+      return { minEpoch: 0, timeSpanMs: 10000, eventEpochs: new Map<RecentEvent, number>() };
     }
-    const now = Date.now();
     const eventEpochs = new Map<RecentEvent, number>();
     filteredEvents.forEach((event, index) => {
-      // Telemetry is newest-first; this deterministic fallback preserves that order.
-      eventEpochs.set(event, getEventEpoch(event) ?? now - index * 100);
+      const ep = getEventEpoch(event);
+      eventEpochs.set(event, ep > 0 ? ep : index * 100);
     });
     const epochs = filteredEvents.map((event) => eventEpochs.get(event)!);
     const min = Math.min(...epochs);
@@ -113,7 +111,7 @@ export const GanttRequestTimeline: React.FC<GanttRequestTimelineProps> = ({
     const lanes: { id: string; label: string; color: string; podIp?: string }[] = replicas.map((r) => ({
       id: r.replica_id,
       label: r.name,
-      color: r.color || '#2563EB',
+      color: r.color || '#4f46e5',
       podIp: r.pod_ip,
     }));
     lanes.push({
@@ -126,22 +124,22 @@ export const GanttRequestTimeline: React.FC<GanttRequestTimelineProps> = ({
   }, [replicas]);
 
   return (
-    <div className="w-full rounded-2xl bg-white border border-slate-200/80 shadow-sm p-5 sm:p-6">
+    <div className="w-full rounded-2xl bg-white dark:bg-[#151515] border border-slate-200/80 dark:border-neutral-800 shadow-sm p-5 sm:p-6">
       {/* Header and Controls */}
-      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-4 mb-5 border-b border-slate-100">
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-4 mb-5 border-b border-slate-100 dark:border-neutral-800">
         <div>
           <div className="flex items-center gap-2">
-            <div className="p-1.5 rounded-lg bg-indigo-50 text-indigo-600 border border-indigo-100">
+            <div className="p-1.5 rounded-lg bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400 border border-indigo-100 dark:border-indigo-900/50">
               <Clock size={18} />
             </div>
-            <h3 className="text-base font-bold text-slate-900 tracking-tight flex items-center gap-2">
+            <h3 className="text-base font-bold text-slate-900 dark:text-neutral-100 tracking-tight flex items-center gap-2">
               Request Execution Gantt Timeline
-              <span className="px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 text-xs font-mono font-medium border border-slate-200">
+              <span className="px-2 py-0.5 rounded-full bg-slate-100 dark:bg-neutral-800 text-slate-700 dark:text-neutral-300 text-xs font-mono font-medium border border-slate-200 dark:border-neutral-700">
                 {filteredEvents.length} events plotted
               </span>
             </h3>
           </div>
-          <p className="text-xs text-slate-500 mt-0.5">
+          <p className="text-xs text-slate-500 dark:text-neutral-400 mt-0.5">
             Real execution spans per pod replica with start offsets, measured roundtrip durations, and HTTP status.
           </p>
         </div>
@@ -149,14 +147,14 @@ export const GanttRequestTimeline: React.FC<GanttRequestTimelineProps> = ({
         {/* Filter and View Options */}
         <div className="flex flex-wrap items-center gap-2.5">
           {/* Search */}
-          <div className="flex items-center bg-slate-50 border border-slate-200 px-2.5 py-1.5 rounded-lg text-xs">
+          <div className="flex items-center bg-slate-50 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 px-2.5 py-1.5 rounded-lg text-xs">
             <Search size={14} className="text-slate-400 mr-2" />
             <input
               type="text"
               placeholder="Search request ID or pod..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="bg-transparent border-0 text-slate-800 placeholder-slate-400 focus:outline-none text-xs w-44"
+              className="bg-transparent border-0 text-slate-800 dark:text-neutral-200 placeholder-slate-400 focus:outline-none text-xs w-44"
             />
           </div>
 
@@ -164,7 +162,7 @@ export const GanttRequestTimeline: React.FC<GanttRequestTimelineProps> = ({
           <select
             value={filterPod}
             onChange={(e) => setFilterPod(e.target.value)}
-            className="bg-slate-50 border border-slate-200 text-slate-700 font-mono text-xs px-2.5 py-1.5 rounded-lg focus:outline-none cursor-pointer"
+            className="bg-slate-50 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 text-slate-700 dark:text-neutral-300 font-mono text-xs px-2.5 py-1.5 rounded-lg focus:outline-none cursor-pointer"
           >
             <option value="ALL">All Pods</option>
             {replicas.map((r) => (
@@ -178,7 +176,7 @@ export const GanttRequestTimeline: React.FC<GanttRequestTimelineProps> = ({
           <select
             value={filterStatus}
             onChange={(e) => setFilterStatus(e.target.value)}
-            className="bg-slate-50 border border-slate-200 text-slate-700 font-mono text-xs px-2.5 py-1.5 rounded-lg focus:outline-none cursor-pointer"
+            className="bg-slate-50 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 text-slate-700 dark:text-neutral-300 font-mono text-xs px-2.5 py-1.5 rounded-lg focus:outline-none cursor-pointer"
           >
             <option value="ALL">Status: All</option>
             <option value="200">200 OK Only</option>
@@ -189,7 +187,7 @@ export const GanttRequestTimeline: React.FC<GanttRequestTimelineProps> = ({
           <select
             value={windowSize}
             onChange={(e) => onWindowSizeChange(Number(e.target.value))}
-            className="bg-slate-50 border border-slate-200 text-slate-700 font-mono text-xs px-2.5 py-1.5 rounded-lg focus:outline-none cursor-pointer"
+            className="bg-slate-50 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 text-slate-700 dark:text-neutral-300 font-mono text-xs px-2.5 py-1.5 rounded-lg focus:outline-none cursor-pointer"
             title="Max requests retained in timeline view"
           >
             <option value="15">Last 15</option>
@@ -201,7 +199,7 @@ export const GanttRequestTimeline: React.FC<GanttRequestTimelineProps> = ({
           {onClearEvents && (
             <button
               onClick={onClearEvents}
-              className="p-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-500 hover:text-slate-800 transition-colors"
+              className="p-1.5 rounded-lg bg-slate-100 dark:bg-neutral-800 hover:bg-slate-200 dark:hover:bg-neutral-700 text-slate-500 dark:text-neutral-400 hover:text-slate-800 dark:hover:text-neutral-200 transition-colors"
               title="Clear event buffer"
             >
               <Trash2 size={14} />
@@ -211,10 +209,10 @@ export const GanttRequestTimeline: React.FC<GanttRequestTimelineProps> = ({
       </div>
 
       {/* Gantt Visual Canvas Area */}
-      <div className="w-full rounded-xl bg-slate-50 border border-slate-200 text-slate-700 p-4 sm:p-5 overflow-x-auto">
+      <div className="w-full rounded-xl bg-slate-50 dark:bg-neutral-900/40 border border-slate-200 dark:border-neutral-800 text-slate-700 dark:text-neutral-300 p-4 sm:p-5 overflow-x-auto">
         <div className="min-w-[700px]">
           {/* Time scale ruler */}
-          <div className="flex items-center justify-between text-[10px] font-mono text-slate-500 pb-3 mb-3 border-b border-slate-200">
+          <div className="flex items-center justify-between text-[10px] font-mono text-slate-500 dark:text-neutral-400 pb-3 mb-3 border-b border-slate-200 dark:border-neutral-800">
             <span>Oldest request</span>
             <span>Request timeline · {(timeSpanMs / 1000).toFixed(2)}s span</span>
             <span>Latest request</span>
@@ -267,19 +265,19 @@ export const GanttRequestTimeline: React.FC<GanttRequestTimelineProps> = ({
                         className="w-2 h-2 rounded-full shrink-0"
                         style={{ backgroundColor: lane.color }}
                       />
-                      <span className="font-mono text-xs font-semibold text-slate-700 truncate">
+                      <span className="font-mono text-xs font-semibold text-slate-700 dark:text-neutral-300 truncate">
                         {lane.label}
                       </span>
                     </div>
-                    <span className="font-mono text-[10px] text-slate-500">
+                    <span className="font-mono text-[10px] text-slate-500 dark:text-neutral-400">
                       {laneEvents.length}
                     </span>
                   </div>
 
                   {/* Track Bar with Plotted Request Spans */}
-                  <div className="relative flex-1 h-10 rounded-lg bg-white border border-slate-200 overflow-hidden">
+                  <div className="relative flex-1 h-10 rounded-lg bg-white dark:bg-[#151515] border border-slate-200 dark:border-neutral-800 overflow-hidden">
                     {/* Light time guides */}
-                    <div className="absolute inset-0 grid grid-cols-6 divide-x divide-slate-100 pointer-events-none" />
+                    <div className="absolute inset-0 grid grid-cols-6 divide-x divide-slate-100 dark:divide-neutral-800/60 pointer-events-none" />
 
                     {/* One compact block per request, aligned along a single horizontal row. */}
                     {positionedEvents.map(({ ev, index, duration, leftPct, widthPct }) => {
@@ -291,8 +289,8 @@ export const GanttRequestTimeline: React.FC<GanttRequestTimelineProps> = ({
                           onClick={() => setSelectedEventModal(ev)}
                           className={`absolute h-[14px] rounded-sm border px-1 text-[9px] leading-none font-mono transition-colors hover:z-30 ${
                             isSuccess
-                              ? 'bg-emerald-100 hover:bg-emerald-200 text-emerald-800 border-emerald-300'
-                              : 'bg-rose-100 hover:bg-rose-200 text-rose-800 border-rose-300'
+                              ? 'bg-emerald-100 hover:bg-emerald-200 dark:bg-emerald-950/60 dark:hover:bg-emerald-900/80 text-emerald-800 dark:text-emerald-300 border-emerald-300 dark:border-emerald-700'
+                              : 'bg-rose-100 hover:bg-rose-200 dark:bg-rose-950/60 dark:hover:bg-rose-900/80 text-rose-800 dark:text-rose-300 border-rose-300 dark:border-rose-700'
                           }`}
                           style={{
                             left: `${leftPct}%`,
@@ -310,7 +308,7 @@ export const GanttRequestTimeline: React.FC<GanttRequestTimelineProps> = ({
 
                     {/* In flight requests indicator for active pods */}
                     {inFlightRequests.length > 0 && lane.id !== 'unassigned' && (
-                      <div className="absolute right-1 top-1 w-7 h-5 rounded bg-amber-100 border border-amber-300 flex items-center justify-center text-[8px] font-bold text-amber-800">
+                      <div className="absolute right-1 top-1 w-7 h-5 rounded bg-amber-100 dark:bg-amber-950/60 border border-amber-300 dark:border-amber-700 flex items-center justify-center text-[8px] font-bold text-amber-800 dark:text-amber-300">
                         IN
                       </div>
                     )}
@@ -323,22 +321,22 @@ export const GanttRequestTimeline: React.FC<GanttRequestTimelineProps> = ({
       </div>
 
       {/* Legend & Instructions */}
-      <div className="flex flex-wrap items-center justify-between pt-3 mt-4 text-xs text-slate-500 border-t border-slate-100">
+      <div className="flex flex-wrap items-center justify-between pt-3 mt-4 text-xs text-slate-500 dark:text-neutral-400 border-t border-slate-100 dark:border-neutral-800">
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-1.5">
-            <span className="w-3 h-3 rounded bg-emerald-100 border border-emerald-300" />
-            <span className="text-slate-700">200 OK (Completed)</span>
+            <span className="w-3 h-3 rounded bg-emerald-100 dark:bg-emerald-950/60 border border-emerald-300 dark:border-emerald-700" />
+            <span className="text-slate-700 dark:text-neutral-300">200 OK (Completed)</span>
           </div>
           <div className="flex items-center gap-1.5">
-            <span className="w-3 h-3 rounded bg-rose-100 border border-rose-300" />
-            <span className="text-slate-700">Error / Non-200</span>
+            <span className="w-3 h-3 rounded bg-rose-100 dark:bg-rose-950/60 border border-rose-300 dark:border-rose-700" />
+            <span className="text-slate-700 dark:text-neutral-300">Error / Non-200</span>
           </div>
           <div className="flex items-center gap-1.5">
-            <span className="w-3 h-3 rounded bg-amber-100 border border-amber-300" />
-            <span className="text-slate-700">In-Flight</span>
+            <span className="w-3 h-3 rounded bg-amber-100 dark:bg-amber-950/60 border border-amber-300 dark:border-amber-700" />
+            <span className="text-slate-700 dark:text-neutral-300">In-Flight</span>
           </div>
         </div>
-        <span className="text-slate-400 text-[11px]">
+        <span className="text-slate-400 dark:text-neutral-500 text-[11px]">
           Click any Gantt bar to inspect complete request metadata.
         </span>
       </div>
@@ -346,22 +344,22 @@ export const GanttRequestTimeline: React.FC<GanttRequestTimelineProps> = ({
       {/* Request Inspection Modal */}
       {selectedEventModal && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fadeIn">
-          <div className="bg-white rounded-2xl max-w-xl w-full p-6 shadow-2xl border border-slate-200">
-            <div className="flex items-center justify-between pb-3 mb-4 border-b border-slate-100">
+          <div className="bg-white dark:bg-[#151515] rounded-2xl max-w-xl w-full p-6 shadow-2xl border border-slate-200 dark:border-neutral-800">
+            <div className="flex items-center justify-between pb-3 mb-4 border-b border-slate-100 dark:border-neutral-800">
               <div className="flex items-center gap-2">
-                <div className="p-1.5 rounded-lg bg-blue-50 text-blue-600">
+                <div className="p-1.5 rounded-lg bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400">
                   <Zap size={18} />
                 </div>
                 <div>
-                  <h4 className="font-bold text-slate-900 text-sm font-mono">
+                  <h4 className="font-bold text-slate-900 dark:text-neutral-100 text-sm font-mono">
                     {selectedEventModal.request_id}
                   </h4>
-                  <span className="text-xs text-slate-500">Recorded Request Telemetry Event</span>
+                  <span className="text-xs text-slate-500 dark:text-neutral-400">Recorded Request Telemetry Event</span>
                 </div>
               </div>
               <button
                 onClick={() => setSelectedEventModal(null)}
-                className="p-1 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100"
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-neutral-200 hover:bg-slate-100 dark:hover:bg-neutral-800"
               >
                 <X size={18} />
               </button>
@@ -369,73 +367,73 @@ export const GanttRequestTimeline: React.FC<GanttRequestTimelineProps> = ({
 
             <div className="space-y-3 font-mono text-xs">
               <div className="grid grid-cols-2 gap-2">
-                <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-200">
-                  <span className="text-slate-400 block text-[10px]">SERVING POD</span>
-                  <span className="font-bold text-slate-900">{selectedEventModal.assigned_pod}</span>
+                <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800">
+                  <span className="text-slate-400 dark:text-neutral-500 block text-[10px]">SERVING POD</span>
+                  <span className="font-bold text-slate-900 dark:text-neutral-100">{selectedEventModal.assigned_pod}</span>
                 </div>
-                <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-200">
-                  <span className="text-slate-400 block text-[10px]">POD REPLICA ID</span>
-                  <span className="font-semibold text-slate-700 truncate block">
+                <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800">
+                  <span className="text-slate-400 dark:text-neutral-500 block text-[10px]">POD REPLICA ID</span>
+                  <span className="font-semibold text-slate-700 dark:text-neutral-300 truncate block">
                     {selectedEventModal.replica_id}
                   </span>
                 </div>
               </div>
 
               <div className="grid grid-cols-3 gap-2">
-                <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-200">
-                  <span className="text-slate-400 block text-[10px]">MEASURED LATENCY</span>
-                  <span className="font-bold text-emerald-600">
+                <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800">
+                  <span className="text-slate-400 dark:text-neutral-500 block text-[10px]">MEASURED LATENCY</span>
+                  <span className="font-bold text-emerald-600 dark:text-emerald-400">
                     {selectedEventModal.observed_latency_ms} ms
                   </span>
                 </div>
-                <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-200">
-                  <span className="text-slate-400 block text-[10px]">TOTAL DURATION</span>
-                  <span className="font-bold text-slate-900">
+                <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800">
+                  <span className="text-slate-400 dark:text-neutral-500 block text-[10px]">TOTAL DURATION</span>
+                  <span className="font-bold text-slate-900 dark:text-neutral-100">
                     {selectedEventModal.duration_ms || selectedEventModal.observed_latency_ms} ms
                   </span>
                 </div>
-                <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-200">
-                  <span className="text-slate-400 block text-[10px]">HTTP STATUS</span>
-                  <span className={`font-bold ${selectedEventModal.http_status.includes('200') ? 'text-emerald-600' : 'text-rose-600'}`}>
+                <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800">
+                  <span className="text-slate-400 dark:text-neutral-500 block text-[10px]">HTTP STATUS</span>
+                  <span className={`font-bold ${selectedEventModal.http_status.includes('200') ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}>
                     {selectedEventModal.http_status}
                   </span>
                 </div>
               </div>
 
-              <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-200">
-                <span className="text-slate-400 block text-[10px]">ROUTING MECHANISM</span>
-                <span className="font-semibold text-slate-800">
+              <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800">
+                <span className="text-slate-400 dark:text-neutral-500 block text-[10px]">ROUTING MECHANISM</span>
+                <span className="font-semibold text-slate-800 dark:text-neutral-200">
                   {selectedEventModal.routing_mechanism || 'Native Kubernetes Service (ClusterIP)'}
                 </span>
               </div>
 
               {selectedEventModal.gateway_latency_ms != null && (
                 <div className="grid grid-cols-2 gap-2">
-                  <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-200">
-                    <span className="text-slate-400 block text-[10px]">GATEWAY OVERHEAD</span>
-                    <span className="font-semibold text-slate-800">
+                  <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800">
+                    <span className="text-slate-400 dark:text-neutral-500 block text-[10px]">GATEWAY OVERHEAD</span>
+                    <span className="font-semibold text-slate-800 dark:text-neutral-200">
                       {selectedEventModal.gateway_latency_ms} ms
                     </span>
                   </div>
-                  <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-200">
-                    <span className="text-slate-400 block text-[10px]">UPSTREAM REPLICA LATENCY</span>
-                    <span className="font-semibold text-slate-800">
+                  <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800">
+                    <span className="text-slate-400 dark:text-neutral-500 block text-[10px]">UPSTREAM REPLICA LATENCY</span>
+                    <span className="font-semibold text-slate-800 dark:text-neutral-200">
                       {selectedEventModal.upstream_latency_ms || selectedEventModal.observed_latency_ms} ms
                     </span>
                   </div>
                 </div>
               )}
 
-              <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-200">
-                <span className="text-slate-400 block text-[10px]">TIMESTAMP (UTC)</span>
-                <span className="font-semibold text-slate-700">{selectedEventModal.timestamp}</span>
+              <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800">
+                <span className="text-slate-400 dark:text-neutral-500 block text-[10px]">TIMESTAMP (UTC)</span>
+                <span className="font-semibold text-slate-700 dark:text-neutral-300">{selectedEventModal.timestamp}</span>
               </div>
             </div>
 
-            <div className="mt-5 pt-3 border-t border-slate-100 flex justify-end">
+            <div className="mt-5 pt-3 border-t border-slate-100 dark:border-neutral-800 flex justify-end">
               <button
                 onClick={() => setSelectedEventModal(null)}
-                className="px-4 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium text-xs transition-colors"
+                className="px-4 py-2 rounded-lg bg-slate-100 dark:bg-neutral-800 hover:bg-slate-200 dark:hover:bg-neutral-700 text-slate-700 dark:text-neutral-200 font-medium text-xs transition-colors"
               >
                 Close Inspector
               </button>

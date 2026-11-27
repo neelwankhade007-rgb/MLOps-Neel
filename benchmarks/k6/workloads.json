@@ -1,0 +1,7 @@
+{
+  "strategies": ["native", "round_robin", "weighted_round_robin", "adaptive"],
+  "pilot": {"warmup": 30, "measurement": 60, "cooldown": 20, "repetitions": 1, "candidate_rates": [5, 10, 20, 40, 80, 160, 320]},
+  "formal": {"warmup": 60, "measurement": 180, "cooldown": 45, "repetitions": 3},
+  "burst": {"segments": [["baseline", 0.25], ["rise", 0.05], ["peak", 0.20], ["fall", 0.05], ["recovery", 0.45]]},
+  "measurement": {"timeout_seconds": 20, "sample_seconds": 5, "scrape_seconds": 3}
+}

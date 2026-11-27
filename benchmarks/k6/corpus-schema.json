@@ -1,0 +1,16 @@
+{
+  "description": "Offline corpus contract narrowed to values verified in the served model's explicit schema.",
+  "mlflow_run_id": "b0ca6d39e884422fa6fdb3471a2c1349",
+  "features": [
+    {"name": "PassengerId", "type": "number", "required": true},
+    {"name": "Pclass", "type": "number", "required": true},
+    {"name": "Sex", "type": "categorical", "required": true, "options": ["female", "male"]},
+    {"name": "Age", "type": "number", "required": true},
+    {"name": "SibSp", "type": "number", "required": true},
+    {"name": "Parch", "type": "number", "required": true},
+    {"name": "Ticket", "type": "categorical", "required": true, "options": ["PC 17599", "113803", "248698", "PP 9549", "17463"]},
+    {"name": "Fare", "type": "number", "required": true},
+    {"name": "Cabin", "type": "categorical", "required": true, "options": ["C85", "C123", "E46", "G6"]},
+    {"name": "Embarked", "type": "categorical", "required": true, "options": ["C", "S"]}
+  ]
+}

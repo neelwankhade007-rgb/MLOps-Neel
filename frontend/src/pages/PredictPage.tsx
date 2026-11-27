@@ -1,12 +1,15 @@
 import React from 'react';
-import { Rocket, Box, Activity } from 'lucide-react';
+import { Rocket, Box, Activity, RotateCw } from 'lucide-react';
 import Card from '../components/common/Card';
+import Header from '../components/layout/Header';
+import Button from '../components/common/Button';
 import DeploymentSelector from '../components/prediction/DeploymentSelector';
 import PredictionForm from '../components/prediction/PredictionForm';
 import {
   PredictionResultCard,
   PredictionHistory,
 } from '../components/prediction/PredictionHistory';
+import { StatCardSkeleton } from '../components/common/Skeleton';
 import { usePrediction } from '../hooks/usePrediction';
 
 export const PredictPage: React.FC = () => {
@@ -32,79 +35,87 @@ export const PredictPage: React.FC = () => {
   const deploymentStatus = selectedDeployment?.status || 'Active';
 
   return (
-    <div className="max-w-7xl mx-auto space-y-8">
+    <div className="max-w-[1520px] mx-auto space-y-7">
       {/* Header */}
-      <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-4">
-        <div>
-          <p className="text-sm font-medium text-blue-600 mb-1">
-            Model Inference
-          </p>
-          <h1 className="text-3xl font-bold text-slate-900">Predictions</h1>
-          <p className="text-slate-500 mt-1">
-            Send input data to a deployed model and view its prediction.
-          </p>
-        </div>
-
-        <button
-          type="button"
-          onClick={refreshDeployments}
-          disabled={loadingDeployments}
-          className="px-4 py-2.5 rounded-xl border border-slate-200 bg-white text-sm font-medium text-slate-700 hover:bg-slate-50 transition"
-        >
-          {loadingDeployments ? 'Refreshing...' : 'Refresh Endpoints'}
-        </button>
-      </div>
+      <Header
+        category="Model Inference"
+        title="Live Prediction Studio"
+        subtitle="Test deployed models in real time by dispatching feature payloads to active cluster endpoints."
+        action={
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={refreshDeployments}
+            loading={loadingDeployments}
+            icon={<RotateCw size={14} className={loadingDeployments ? 'animate-spin' : ''} />}
+          >
+            Refresh Endpoints
+          </Button>
+        }
+      />
 
       {/* Summary */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
-        <Card className="p-5">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm text-slate-500">Available Endpoints</p>
-              <p className="text-3xl font-bold text-slate-900 mt-1">
-                {deployments.length}
-              </p>
-              <p className="text-xs text-slate-400 mt-1">Deployed model APIs</p>
-            </div>
-            <div className="p-3 rounded-xl bg-blue-50 text-blue-600">
-              <Rocket size={24} />
-            </div>
-          </div>
-        </Card>
+        {loadingDeployments ? (
+          <>
+            <StatCardSkeleton />
+            <StatCardSkeleton />
+            <StatCardSkeleton />
+          </>
+        ) : (
+          <>
+            <Card className="p-5 hoverable">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                    Active Endpoints
+                  </p>
+                  <p className="text-3xl font-bold font-mono text-slate-900 dark:text-white mt-1">
+                    {deployments.length}
+                  </p>
+                  <p className="text-xs text-slate-400 mt-1">Ready for requests</p>
+                </div>
+                <div className="p-3 rounded-2xl bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400">
+                  <Rocket size={22} />
+                </div>
+              </div>
+            </Card>
 
-        <Card className="p-5">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm text-slate-500">Selected Endpoint</p>
-              <p className="text-lg font-bold text-slate-900 mt-2 truncate max-w-[180px]">
-                {selectedDeploy || 'None'}
-              </p>
-              <p className="text-xs text-slate-400 mt-1">
-                Current inference target
-              </p>
-            </div>
-            <div className="p-3 rounded-xl bg-violet-50 text-violet-600">
-              <Box size={24} />
-            </div>
-          </div>
-        </Card>
+            <Card className="p-5 hoverable">
+              <div className="flex items-center justify-between">
+                <div className="min-w-0 pr-2">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                    Selected Model
+                  </p>
+                  <p className="text-lg font-bold font-mono text-slate-900 dark:text-white mt-1.5 truncate">
+                    {selectedDeploy || 'None'}
+                  </p>
+                  <p className="text-xs text-indigo-600 dark:text-indigo-400 mt-1">Inference target</p>
+                </div>
+                <div className="p-3 rounded-2xl bg-violet-50 dark:bg-violet-950/40 text-violet-600 dark:text-violet-400 shrink-0">
+                  <Box size={22} />
+                </div>
+              </div>
+            </Card>
 
-        <Card className="p-5">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm text-slate-500">Predictions This Session</p>
-              <p className="text-3xl font-bold text-slate-900 mt-1">
-                {predictionHistory.length}
-              </p>
-              <p className="text-xs text-slate-400 mt-1">
-                Recent inference requests
-              </p>
-            </div>
-            <div className="p-3 rounded-xl bg-emerald-50 text-emerald-600">
-              <Activity size={24} />
-            </div>
-          </div>
-        </Card>
+            <Card className="p-5 hoverable">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                    Session Inferences
+                  </p>
+                  <p className="text-3xl font-bold font-mono text-slate-900 dark:text-white mt-1">
+                    {predictionHistory.length}
+                  </p>
+                  <p className="text-xs text-emerald-600 dark:text-emerald-400 mt-1">Executed queries</p>
+                </div>
+                <div className="p-3 rounded-2xl bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400">
+                  <Activity size={22} />
+                </div>
+              </div>
+            </Card>
+          </>
+        )}
       </div>
 
       {/* Endpoint Selection */}

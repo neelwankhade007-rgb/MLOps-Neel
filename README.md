@@ -34,6 +34,23 @@ Choose one setup path below.
 
 Run commands from the repository root unless a command says otherwise. Examples use PowerShell on Windows; adjust activation commands for your shell.
 
+On Windows, install the Kubernetes prerequisites with WinGet and then open a new terminal. Start Docker Desktop and wait for the engine to become ready before starting Minikube.
+
+```powershell
+winget install --id Git.Git --exact
+winget install --id Docker.DockerDesktop --exact
+winget install --id Kubernetes.minikube --exact
+winget install --id Kubernetes.kubectl --exact
+git clone https://github.com/Rutwik2005/MLOps.git
+cd MLOps
+git switch neel-contribution
+docker version
+minikube version
+kubectl version --client
+```
+
+For local application development, also install Python 3.11 and Node.js, then follow setup path 3. The container images install their own application dependencies.
+
 ## Setup path 1: Kubernetes with Minikube
 
 This path applies the manifests in `kubernetes/`. It includes three inference replicas and the inference gateway. The app's frontend is exposed locally with `kubectl port-forward`.
@@ -42,6 +59,7 @@ This path applies the manifests in `kubernetes/`. It includes three inference re
 
 ```powershell
 minikube start --driver=docker
+minikube addons enable metrics-server
 kubectl get nodes
 ```
 
@@ -109,6 +127,26 @@ Optional monitoring manifests are separate from the app workloads. Apply them if
 ```powershell
 kubectl apply -f kubernetes/monitoring/
 ```
+
+### 6. Prepare a model on a fresh cluster
+
+The manifests reference a model run from an existing environment. A new MinIO volume starts empty. If inference readiness reports missing artifacts, open the frontend, create an account, upload a dataset, train a model, and register the successful run. Use its MLflow run ID below. Training must produce both the model artifact and `explicit_schema.json`.
+
+```powershell
+$runId = Read-Host 'MLflow run ID'
+kubectl -n mlops set env deployment/backend INFERENCE_RUN_ID=$runId
+kubectl -n mlops set env deployment/inference-service MODEL_RUN_ID=$runId
+kubectl -n mlops set env deployment/inference-gateway MODEL_RUN_ID=$runId
+kubectl -n mlops rollout status deployment/backend --timeout=180s
+kubectl -n mlops rollout status deployment/inference-service --timeout=300s
+kubectl -n mlops rollout status deployment/inference-gateway --timeout=180s
+```
+
+Create an application deployment for the registered model in the Registry page and try one prediction from the UI. Record the run ID in your environment configuration if you redeploy from manifests. Inspect inference logs if artifact loading fails.
+
+### Optional benchmarking
+
+Install Python 3.10 or later and k6. On Windows, use `winget install --id GrafanaLabs.k6 --exact` and verify it with `k6 version`. Apply the monitoring manifests before benchmarking. Follow the [k6 setup and execution guide](benchmarks/k6/README.md) for the backend and Prometheus port-forwards, authenticated deployment selection, offline validation and analysis. The checked-in benchmark corpus is designed for the documented Titanic feature schema. For another model, prepare a compatible synthetic corpus and validate it against that deployment's schema. Install Matplotlib in your benchmark environment if exporting the PNG and SVG evaluation figures.
 
 ## Setup path 2: Docker Compose
 

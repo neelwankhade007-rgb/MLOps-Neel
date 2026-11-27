@@ -46,26 +46,26 @@ export const LiveRoutingVisualizer: React.FC<LiveRoutingVisualizerProps> = ({
   const hasActiveTraffic = throughputRps > 0 || isGeneratingTraffic || activePackets.length > 0;
 
   return (
-    <div className="w-full rounded-2xl bg-white border border-slate-200/80 shadow-sm p-5 sm:p-6">
+    <div className="w-full rounded-2xl bg-white dark:bg-[#151515] border border-slate-200/80 dark:border-neutral-800 shadow-sm p-5 sm:p-6">
       {/* Top Header */}
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pb-4 mb-6 border-b border-slate-100">
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pb-4 mb-6 border-b border-slate-100 dark:border-neutral-800">
         <div className="flex items-center gap-3">
-          <div className="p-2 rounded-xl bg-blue-50 text-blue-600 border border-blue-100">
+          <div className="p-2 rounded-xl bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400 border border-indigo-100 dark:border-indigo-900/50">
             <Layers size={20} />
           </div>
           <div>
-            <h2 className="text-base sm:text-lg font-bold text-slate-900 tracking-tight flex items-center gap-2">
+            <h2 className="text-base sm:text-lg font-bold text-slate-900 dark:text-neutral-100 tracking-tight flex items-center gap-2">
               Live Request-Routing Topology
               <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-semibold border ${
                 hasActiveTraffic
-                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                  : 'bg-slate-100 text-slate-600 border-slate-200'
+                  ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400 border-emerald-200 dark:border-emerald-800'
+                  : 'bg-slate-100 dark:bg-neutral-800 text-slate-600 dark:text-neutral-400 border-slate-200 dark:border-neutral-700'
               }`}>
-                <span className={`w-1.5 h-1.5 rounded-full ${hasActiveTraffic ? 'bg-emerald-500 animate-ping' : 'bg-slate-400'}`} />
+                <span className={`w-1.5 h-1.5 rounded-full ${hasActiveTraffic ? 'bg-emerald-500 animate-ping' : 'bg-slate-400 dark:bg-neutral-500'}`} />
                 {hasActiveTraffic ? 'TRAFFIC FLOWING' : 'IDLE / AWAITING TRAFFIC'}
               </span>
             </h2>
-            <p className="text-xs text-slate-500 mt-0.5">
+            <p className="text-xs text-slate-500 dark:text-neutral-400 mt-0.5">
               Real-time animated visualization of actual prediction dispatch from ingress through routing layer to serving replica pods.
             </p>
           </div>
@@ -73,22 +73,22 @@ export const LiveRoutingVisualizer: React.FC<LiveRoutingVisualizerProps> = ({
 
         {/* Status badges */}
         <div className="flex items-center gap-2 text-xs">
-          <span className="font-mono text-slate-500">Active Routing:</span>
+          <span className="font-mono text-slate-500 dark:text-neutral-400">Active Routing:</span>
           <span className={`px-2.5 py-1 rounded-lg font-mono text-xs font-bold border ${
             isGatewayActive
-              ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
-              : 'bg-blue-50 text-blue-800 border-blue-200'
+              ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800'
+              : 'bg-indigo-50 dark:bg-indigo-950/40 text-indigo-800 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800'
           }`}>
             {activeStrategyTitle}
           </span>
-          <span className="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-700 font-mono text-xs border border-slate-200">
+          <span className="px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-neutral-800 text-slate-700 dark:text-neutral-300 font-mono text-xs border border-slate-200 dark:border-neutral-700">
             {replicas.filter((r) => r.is_ready).length}/{replicas.length} Pods Healthy
           </span>
         </div>
       </div>
 
       {/* Main Visual Canvas Area */}
-      <div className="relative w-full rounded-xl bg-slate-50/70 p-4 sm:p-6 border border-slate-200/80 overflow-hidden">
+      <div className="relative w-full rounded-xl bg-slate-50/70 dark:bg-neutral-900/50 p-4 sm:p-6 border border-slate-200/80 dark:border-neutral-800 overflow-x-auto">
         {/* Animated Packets Overlay */}
         <div className="absolute inset-0 pointer-events-none z-20 overflow-hidden">
           {activePackets.map((pkt) => {
@@ -98,31 +98,50 @@ export const LiveRoutingVisualizer: React.FC<LiveRoutingVisualizerProps> = ({
             );
             const targetIdx = repIndex >= 0 ? repIndex : pkt.targetPodIndex;
             const totalReps = Math.max(1, replicas.length);
-            // Y position relative to number of replica cards
-            const yStart = 50; // center router Y %
+            // Y position relative to target pod cards (centered in right column)
+            const yStart = 50; // Ingress and Router are vertically centered
             const yEnd = totalReps === 1 ? 50 : 20 + (targetIdx / (totalReps - 1)) * 60;
-            // X position: from router (40%) to pod (75%)
-            const currentX = 40 + pkt.progress * 35;
-            const currentY = yStart + (yEnd - yStart) * pkt.progress;
+
+            // Two-phase smooth trajectory:
+            // Phase 1 (0 to 0.35): Ingress (15%) -> Router (48%), horizontal y=50%
+            // Phase 2 (0.35 to 1.0): Router (48%) -> Pod (80%), smooth gliding curve to yEnd
+            let currentX: number;
+            let currentY: number;
+
+            if (pkt.progress <= 0.35) {
+              const segT = pkt.progress / 0.35;
+              currentX = 14 + segT * (48 - 14);
+              currentY = 50;
+            } else {
+              const segT = (pkt.progress - 0.35) / 0.65;
+              currentX = 48 + segT * (80 - 48);
+              currentY = yStart + (yEnd - yStart) * segT;
+            }
 
             return (
               <div
                 key={pkt.id}
-                className="absolute transform -translate-x-1/2 -translate-y-1/2 transition-all duration-75"
+                className="absolute transform -translate-x-1/2 -translate-y-1/2 transition-opacity duration-100 z-30 pointer-events-none"
                 style={{
                   left: `${currentX}%`,
                   top: `${currentY}%`,
-                  opacity: pkt.progress > 0.95 ? 1 - (pkt.progress - 0.95) * 20 : 1,
+                  opacity: pkt.progress > 0.93 ? Math.max(0, 1 - (pkt.progress - 0.93) * 14.2) : 1,
                 }}
               >
-                <div className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-mono font-bold shadow-md animate-bounce ${
-                  pkt.status === 200
-                    ? 'bg-emerald-500 text-white shadow-emerald-500/40 ring-2 ring-emerald-300'
-                    : 'bg-rose-500 text-white shadow-rose-500/40 ring-2 ring-rose-300'
-                }`}>
-                  <Zap size={10} className="fill-current" />
-                  <span>{pkt.requestId.slice(-5)}</span>
-                  <span className="text-[9px] opacity-80">{pkt.latencyMs}ms</span>
+                {/* Trailing Aura Glow */}
+                <div className="relative">
+                  <div className={`absolute -inset-1 rounded-full blur-xs opacity-75 animate-ping -z-10 ${
+                    pkt.status === 200 ? 'bg-emerald-400' : 'bg-rose-400'
+                  }`} />
+                  <div className={`flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold shadow-lg animate-packet-aura ${
+                    pkt.status === 200
+                      ? 'bg-emerald-600 text-white shadow-emerald-500/50 ring-2 ring-emerald-300 dark:ring-emerald-400'
+                      : 'bg-rose-600 text-white shadow-rose-500/50 ring-2 ring-rose-300 dark:ring-rose-400'
+                  }`}>
+                    <Zap size={10} className="fill-current animate-pulse shrink-0" />
+                    <span>{pkt.requestId.slice(-5)}</span>
+                    <span className="text-[9px] opacity-90">{pkt.latencyMs}ms</span>
+                  </div>
                 </div>
               </div>
             );
@@ -132,41 +151,41 @@ export const LiveRoutingVisualizer: React.FC<LiveRoutingVisualizerProps> = ({
         <div className="grid grid-cols-12 gap-4 sm:gap-6 items-center min-w-[850px]">
           {/* STEP 1: Traffic Generator & Client Ingress (3 Columns) */}
           <div className="col-span-3 flex flex-col gap-3">
-            <div className="p-4 rounded-xl bg-white border border-slate-200 shadow-sm relative">
-              <div className="absolute -top-2.5 left-3 px-2 py-0.5 rounded bg-slate-900 text-white font-mono text-[9px] font-bold uppercase tracking-wider">
+            <div className="p-4 rounded-xl bg-white dark:bg-[#151515] border border-slate-200 dark:border-neutral-800 shadow-sm relative">
+              <div className="absolute -top-2.5 left-3 px-2 py-0.5 rounded bg-slate-900 dark:bg-neutral-800 text-white font-mono text-[9px] font-bold uppercase tracking-wider">
                 Source 1 · Ingress
               </div>
 
               <div className="flex items-center justify-between mb-2 pt-1">
-                <span className="font-bold text-slate-900 text-sm flex items-center gap-1.5">
-                  <Activity size={15} className="text-blue-600" />
+                <span className="font-bold text-slate-900 dark:text-neutral-100 text-sm flex items-center gap-1.5">
+                  <Activity size={15} className="text-indigo-600 dark:text-indigo-400" />
                   Client Requests
                 </span>
                 <span className={`px-2 py-0.5 rounded font-mono text-xs font-bold border ${
                   hasActiveTraffic
-                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                    : 'bg-slate-100 text-slate-600 border-slate-200'
+                    ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400 border-emerald-200 dark:border-emerald-800'
+                    : 'bg-slate-100 dark:bg-neutral-800 text-slate-600 dark:text-neutral-400 border-slate-200 dark:border-neutral-700'
                 }`}>
                   {throughputRps.toFixed(1)} rps
                 </span>
               </div>
 
-              <p className="text-xs text-slate-500 mb-3">
+              <p className="text-xs text-slate-500 dark:text-neutral-400 mb-3">
                 Incoming inference prediction requests dispatched via cluster mesh or test generator.
               </p>
 
               <div className="space-y-1.5 font-mono text-xs">
-                <div className="flex justify-between items-center p-2 rounded bg-slate-50 border border-slate-100">
-                  <span className="text-slate-500">Payload</span>
-                  <span className="font-semibold text-slate-900">Titanic Features (JSON)</span>
+                <div className="flex justify-between items-center p-2 rounded bg-slate-50 dark:bg-neutral-900 border border-slate-100 dark:border-neutral-800">
+                  <span className="text-slate-500 dark:text-neutral-400">Payload</span>
+                  <span className="font-semibold text-slate-900 dark:text-neutral-100">Titanic Features (JSON)</span>
                 </div>
-                <div className="flex justify-between items-center p-2 rounded bg-slate-50 border border-slate-100">
-                  <span className="text-slate-500">Transport</span>
-                  <span className="font-semibold text-slate-900">HTTP/1.1 REST</span>
+                <div className="flex justify-between items-center p-2 rounded bg-slate-50 dark:bg-neutral-900 border border-slate-100 dark:border-neutral-800">
+                  <span className="text-slate-500 dark:text-neutral-400">Transport</span>
+                  <span className="font-semibold text-slate-900 dark:text-neutral-100">HTTP/1.1 REST</span>
                 </div>
-                <div className="flex justify-between items-center p-2 rounded bg-slate-50 border border-slate-100">
-                  <span className="text-slate-500">Target</span>
-                  <span className="font-semibold text-blue-600 truncate max-w-[140px]">
+                <div className="flex justify-between items-center p-2 rounded bg-slate-50 dark:bg-neutral-900 border border-slate-100 dark:border-neutral-800">
+                  <span className="text-slate-500 dark:text-neutral-400">Target</span>
+                  <span className="font-semibold text-indigo-600 dark:text-indigo-400 truncate max-w-[140px]">
                     {isGatewayActive ? 'gateway:8080/predict' : 'service:8000/predict'}
                   </span>
                 </div>
@@ -178,25 +197,25 @@ export const LiveRoutingVisualizer: React.FC<LiveRoutingVisualizerProps> = ({
           <div className="col-span-1 flex flex-col items-center justify-center">
             <div className="flex flex-col items-center gap-1 text-center">
               <span className={`font-mono text-[10px] font-bold ${
-                hasActiveTraffic ? 'text-blue-600 animate-pulse' : 'text-slate-400'
+                hasActiveTraffic ? 'text-indigo-600 dark:text-indigo-400 animate-pulse' : 'text-slate-400 dark:text-neutral-500'
               }`}>
                 {hasActiveTraffic ? `${throughputRps.toFixed(1)} rps` : 'idle'}
               </span>
-              <div className="w-full flex items-center justify-center text-slate-400">
+              <div className="w-full flex items-center justify-center text-slate-400 dark:text-neutral-500">
                 <svg fill="none" height="24" viewBox="0 0 48 24" width="48">
                   <path
                     d="M0,12 L38,12 M32,6 L40,12 L32,18"
-                    stroke={hasActiveTraffic ? '#2563EB' : '#94A3B8'}
+                    stroke={hasActiveTraffic ? '#4f46e5' : '#94A3B8'}
                     strokeLinecap="round"
                     strokeLinejoin="round"
                     strokeWidth="2.5"
                   />
                   {hasActiveTraffic && (
-                    <circle cx="20" cy="12" r="3.5" fill="#2563EB" className="animate-ping" />
+                    <circle cx="20" cy="12" r="3.5" fill="#4f46e5" className="animate-ping" />
                   )}
                 </svg>
               </div>
-              <span className="text-[9px] uppercase tracking-wider text-slate-500 font-semibold">
+              <span className="text-[9px] uppercase tracking-wider text-slate-500 dark:text-neutral-400 font-semibold">
                 DISPATCH
               </span>
             </div>
@@ -204,39 +223,39 @@ export const LiveRoutingVisualizer: React.FC<LiveRoutingVisualizerProps> = ({
 
           {/* STEP 2: Central Routing Strategy Node (4 Columns) */}
           <div className="col-span-4 flex flex-col">
-            <div className={`p-4 rounded-xl bg-white border shadow-md relative transition-all ${
+            <div className={`p-4 rounded-xl bg-white dark:bg-[#151515] border shadow-md relative transition-all ${
               isGatewayActive
-                ? 'border-emerald-300 ring-2 ring-emerald-500/10'
-                : 'border-blue-300 ring-2 ring-blue-500/10'
+                ? 'border-emerald-300 dark:border-emerald-700 ring-2 ring-emerald-500/10'
+                : 'border-indigo-300 dark:border-indigo-700 ring-2 ring-indigo-500/10'
             }`}>
               <div className={`absolute -top-2.5 left-3 px-2 py-0.5 rounded text-white font-mono text-[9px] font-bold uppercase tracking-wider ${
-                isGatewayActive ? 'bg-emerald-700' : 'bg-blue-700'
+                isGatewayActive ? 'bg-emerald-700' : 'bg-indigo-700'
               }`}>
                 {isGatewayActive ? 'L7 User-Space Gateway' : 'Kernel L4 K8s Service'}
               </div>
 
               <div className="flex items-center justify-between mb-2 pt-1">
-                <span className="font-bold text-slate-900 text-sm flex items-center gap-1.5">
-                  <Cpu size={16} className={isGatewayActive ? "text-emerald-600" : "text-blue-600"} />
+                <span className="font-bold text-slate-900 dark:text-neutral-100 text-sm flex items-center gap-1.5">
+                  <Cpu size={16} className={isGatewayActive ? "text-emerald-600 dark:text-emerald-400" : "text-indigo-600 dark:text-indigo-400"} />
                   {isGatewayActive ? 'Inference Gateway Router' : 'Kubernetes ClusterIP'}
                 </span>
                 <span className={`px-2 py-0.5 rounded font-mono text-[10px] font-bold border ${
                   isGatewayActive
-                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                    : 'bg-blue-50 text-blue-700 border-blue-200'
+                    ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800'
+                    : 'bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800'
                 }`}>
                   {isGatewayActive ? 'L7 PROXY' : 'L4 IPTABLES'}
                 </span>
               </div>
 
-              <div className="p-3 rounded-lg bg-slate-50 border border-slate-100 mb-3 text-xs space-y-1.5">
+              <div className="p-3 rounded-lg bg-slate-50 dark:bg-neutral-900 border border-slate-100 dark:border-neutral-800 mb-3 text-xs space-y-1.5">
                 <div className="flex justify-between items-center">
-                  <span className="text-slate-500 font-medium">Policy Engine:</span>
-                  <span className="font-bold font-mono text-slate-900">{activeStrategyTitle}</span>
+                  <span className="text-slate-500 dark:text-neutral-400 font-medium">Policy Engine:</span>
+                  <span className="font-bold font-mono text-slate-900 dark:text-neutral-100">{activeStrategyTitle}</span>
                 </div>
                 <div className="flex justify-between items-center">
-                  <span className="text-slate-500 font-medium">Target Mode:</span>
-                  <span className="font-mono text-slate-700">
+                  <span className="text-slate-500 dark:text-neutral-400 font-medium">Target Mode:</span>
+                  <span className="font-mono text-slate-700 dark:text-neutral-300">
                     {activeStrategy === 'native'
                       ? 'ClusterIP (Kernel L4 Load Balancer)'
                       : activeStrategy === 'round_robin'
@@ -247,16 +266,16 @@ export const LiveRoutingVisualizer: React.FC<LiveRoutingVisualizerProps> = ({
                   </span>
                 </div>
                 <div className="flex justify-between items-center">
-                  <span className="text-slate-500 font-medium">Replicas Discovered:</span>
-                  <span className="font-mono font-semibold text-emerald-700">
+                  <span className="text-slate-500 dark:text-neutral-400 font-medium">Replicas Discovered:</span>
+                  <span className="font-mono font-semibold text-emerald-700 dark:text-emerald-400">
                     {replicas.length} healthy endpoints
                   </span>
                 </div>
               </div>
 
               {/* Strategy Details Indicator */}
-              <div className="text-[11px] text-slate-600 bg-slate-100/70 p-2 rounded border border-slate-200 flex items-center gap-1.5">
-                <ShieldCheck size={14} className={isGatewayActive ? "text-emerald-600 shrink-0" : "text-blue-600 shrink-0"} />
+              <div className="text-[11px] text-slate-600 dark:text-neutral-300 bg-slate-100/70 dark:bg-neutral-900 p-2 rounded border border-slate-200 dark:border-neutral-800 flex items-center gap-1.5">
+                <ShieldCheck size={14} className={isGatewayActive ? "text-emerald-600 dark:text-emerald-400 shrink-0" : "text-indigo-600 dark:text-indigo-400 shrink-0"} />
                 <span className="truncate">
                   {isGatewayActive
                     ? `Gateway distributes traffic across ${replicas.length} live pods.`
@@ -278,47 +297,47 @@ export const LiveRoutingVisualizer: React.FC<LiveRoutingVisualizerProps> = ({
                 <div
                   key={rep.replica_id || idx}
                   onClick={() => onSelectReplica?.(rep)}
-                  className={`p-3 rounded-xl bg-white border cursor-pointer transition-all duration-300 relative ${
+                  className={`p-3 rounded-xl bg-white dark:bg-[#151515] border cursor-pointer transition-all duration-300 relative select-none ${
                     isHitRecently
-                      ? 'ring-4 ring-emerald-400 border-emerald-500 bg-emerald-50/40 shadow-lg shadow-emerald-500/10 scale-[1.01]'
-                      : 'border-slate-200 hover:border-slate-300 shadow-sm'
+                      ? 'ring-4 ring-emerald-400 border-emerald-500 bg-emerald-50/50 dark:bg-emerald-950/40 shadow-lg shadow-emerald-500/25 scale-[1.02] pod-arrival-active'
+                      : 'border-slate-200 dark:border-neutral-800 hover:border-slate-300 dark:hover:border-neutral-700 shadow-sm hover:-translate-y-0.5'
                   }`}
                 >
                   <div className="flex items-center justify-between mb-1.5">
                     <div className="flex items-center gap-2">
                       <span
                         className="w-2.5 h-2.5 rounded-full"
-                        style={{ backgroundColor: rep.color || '#2563EB' }}
+                        style={{ backgroundColor: rep.color || '#4f46e5' }}
                       />
-                      <span className="font-bold text-slate-900 text-xs font-mono">
+                      <span className="font-bold text-slate-900 dark:text-neutral-100 text-xs font-mono">
                         {rep.name}
                       </span>
                       <span className={`px-1.5 py-0.2 rounded font-mono text-[9px] font-bold ${
-                        rep.is_ready ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'
+                        rep.is_ready ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300' : 'bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300'
                       }`}>
                         {rep.is_ready ? 'READY' : 'OFFLINE'}
                       </span>
                     </div>
 
-                    <span className="font-mono text-xs font-bold text-slate-900">
+                    <span className="font-mono text-xs font-bold text-slate-900 dark:text-neutral-100">
                       {rep.requests_served} reqs
                     </span>
                   </div>
 
-                  <div className="grid grid-cols-3 gap-1.5 text-[10px] font-mono text-slate-600 pt-1 border-t border-slate-100">
+                  <div className="grid grid-cols-3 gap-1.5 text-[10px] font-mono text-slate-600 dark:text-neutral-400 pt-1 border-t border-slate-100 dark:border-neutral-800">
                     <div>
-                      <span className="text-slate-400 block text-[9px]">IP</span>
-                      <span className="font-semibold truncate block">{rep.pod_ip || '10.244.0.x'}</span>
+                      <span className="text-slate-400 dark:text-neutral-500 block text-[9px]">IP</span>
+                      <span className="font-semibold truncate block text-slate-800 dark:text-neutral-200">{rep.pod_ip || '10.244.0.x'}</span>
                     </div>
                     <div>
-                      <span className="text-slate-400 block text-[9px]">LATENCY</span>
-                      <span className="font-semibold text-slate-800">
+                      <span className="text-slate-400 dark:text-neutral-500 block text-[9px]">LATENCY</span>
+                      <span className="font-semibold text-slate-800 dark:text-neutral-200">
                         {rep.avg_latency_ms ? `${rep.avg_latency_ms}ms` : '<1ms'}
                       </span>
                     </div>
                     <div>
-                      <span className="text-slate-400 block text-[9px]">SHARE</span>
-                      <span className="font-bold text-blue-600">
+                      <span className="text-slate-400 dark:text-neutral-500 block text-[9px]">SHARE</span>
+                      <span className="font-bold text-indigo-600 dark:text-indigo-400">
                         {rep.traffic_share_pct ? `${rep.traffic_share_pct}%` : '0%'}
                       </span>
                     </div>

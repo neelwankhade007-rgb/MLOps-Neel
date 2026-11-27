@@ -21,7 +21,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from main import app, router, MODEL_RUN_ID
-from router import RoundRobinRouter
+from router import ADAPTIVE_METRIC_MAX_AGE_S, RoundRobinRouter
 
 
 # ---------------------------------------------------------------------------
@@ -82,6 +82,10 @@ class TestRoundRobinRouter:
         scores = r.adaptive_scores()
         assert scores[second] < scores[first]
         assert r.next_endpoint("adaptive") == second
+        decision = r.last_adaptive_decision()
+        assert decision["scores"][second] < decision["scores"][first]
+        assert decision["selected_endpoint"] == second
+        assert decision["calculated_at"] is not None
 
     def test_adaptive_uses_min_max_normalization_and_ema(self):
         r = RoundRobinRouter()
@@ -125,8 +129,9 @@ class TestRoundRobinRouter:
             r.refresh()
         for endpoint, latency in ((first, 1000.0), (second, 1.0)):
             r.record_result(endpoint, latency, 200)
-            r._observations[endpoint]["latency_at"] -= 120.0
-            r._observations[endpoint]["error_at"] -= 120.0
+            # Ensure the sample is beyond the freshness boundary despite clock precision.
+            r._observations[endpoint]["latency_at"] -= ADAPTIVE_METRIC_MAX_AGE_S + 1.0
+            r._observations[endpoint]["error_at"] -= ADAPTIVE_METRIC_MAX_AGE_S + 1.0
 
         scores = r.adaptive_scores()
         assert scores[first] == pytest.approx(scores[second])
@@ -191,6 +196,17 @@ class TestRoundRobinRouter:
         second = r.next_endpoint("weighted_round_robin", exclude=[first])
         assert first != second
         assert second in ("http://10.0.0.1:8000", "http://10.0.0.3:8000")
+
+    def test_wrr_retry_progresses_under_extreme_weight_skew(self):
+        r = RoundRobinRouter()
+        r.set_weights([1000, 2, 1])
+        r._endpoints = ["10.0.0.1", "10.0.0.2", "10.0.0.3"]
+        first = r.next_endpoint("weighted_round_robin")
+        assert first == "http://10.0.0.1:8000"
+        assert r.next_endpoint("weighted_round_robin", exclude=[first]) == "http://10.0.0.2:8000"
+        before = r._wrr_current.copy()
+        assert r.next_endpoint("weighted_round_robin", exclude=[f"http://{ip}:8000" for ip in r.endpoints]) is None
+        assert r._wrr_current == before
 
     def test_wrr_weights_must_be_positive_integers(self):
         with patch.dict("os.environ", {"WRR_WEIGHTS": "5,0,2"}):
@@ -296,6 +312,17 @@ class TestGatewayServiceEndpoints:
             data = resp.json()
             assert data["count"] == 2
             assert data["endpoints"] == ["10.0.0.1", "10.0.0.2"]
+
+    def test_adaptive_scores_endpoint_reports_latest_decision(self, client):
+        decision = {
+            "scores": {"http://10.0.0.1:8000": 0.0, "http://10.0.0.2:8000": 1.0},
+            "selected_endpoint": "http://10.0.0.1:8000",
+            "calculated_at": 1234567890.0,
+        }
+        with patch.object(router, "last_adaptive_decision", return_value=decision):
+            resp = client.get("/adaptive-scores")
+        assert resp.status_code == 200
+        assert resp.json() == decision
 
     def test_predict_round_robin_forwarding(self, client):
         """Verify that /predict rotates upstream requests across endpoints."""
@@ -494,6 +521,28 @@ class TestGatewayServiceEndpoints:
                 "http://10.0.0.1:8000/predict",
                 "http://10.0.0.2:8000/predict",
             ]
+
+    def test_wrr_retry_exports_attempt_and_exclusive_handler_spans(self, client):
+        from benchmark_metrics import _totals
+
+        before = {key: values[0] for key, values in _totals.items()}
+        strategy = "weighted_round_robin"
+        fallback = httpx.Response(200, json={"prediction": "1", "replica_id": "pod-2"})
+        with patch.object(router, "_endpoints", ["10.0.0.1", "10.0.0.2"]), \
+             patch.object(router, "_weights", [1000, 1]), \
+             patch.object(router, "_wrr_current", [0, 0]), \
+             patch("httpx.AsyncClient.post", side_effect=[httpx.ConnectError("test"), fallback]) as post:
+            response = client.post("/predict", json={"features": {"x": 1}},
+                                   headers={"X-Routing-Strategy": strategy})
+        assert response.status_code == 200
+        assert [request.args[0] for request in post.call_args_list] == [
+            "http://10.0.0.1:8000/predict", "http://10.0.0.2:8000/predict",
+        ]
+        for span, outcome in [("upstream_http", "connect_error"), ("upstream_http", "ok"),
+                              ("handler_processing", "ok")]:
+            key = span, strategy, outcome
+            assert _totals[key][0] - before.get(key, 0) == 1
+        assert "gateway_span_duration_seconds_count" in client.get("/metrics").text
 
     def test_predict_all_replicas_fail_returns_502(self, client):
         """If all bounded connection attempts fail, returns 502 Bad Gateway."""

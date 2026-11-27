@@ -5,6 +5,7 @@ import TrainingActivityChart from '../components/dashboard/TrainingActivityChart
 import ModelPerformanceChart from '../components/dashboard/ModelPerformanceChart';
 import DeploymentHealthChart from '../components/dashboard/DeploymentHealthChart';
 import RecentActivity from '../components/dashboard/RecentActivity';
+import { StatCardSkeleton } from '../components/common/Skeleton';
 import { useTraining } from '../hooks/useTraining';
 import { modelApi } from '../api/modelApi';
 import { deploymentApi } from '../api/deploymentApi';
@@ -16,8 +17,16 @@ import type { DeploymentHealthItem } from '../components/dashboard/DeploymentHea
 import type { RecentActivityItem } from '../components/dashboard/RecentActivity';
 
 const METRIC_LABELS: Record<string, string> = {
-  accuracy: 'Accuracy', precision: 'Precision', recall: 'Recall', f1: 'F1 score',
-  roc_auc: 'ROC AUC', r2_score: 'R² score', mae: 'MAE', mse: 'MSE', rmse: 'RMSE',
+  accuracy: 'Accuracy',
+  precision: 'Precision',
+  recall: 'Recall',
+  f1: 'F1 Score',
+  f1_score: 'F1 Score',
+  roc_auc: 'ROC-AUC',
+  r2_score: 'R² Score',
+  mae: 'MAE',
+  mse: 'MSE',
+  rmse: 'RMSE',
 };
 
 const formatActivityTime = (value?: string) => {
@@ -27,13 +36,35 @@ const formatActivityTime = (value?: string) => {
 };
 
 export const DashboardPage: React.FC = () => {
-  const { jobs, datasets, completedJobs, runningJobs, failedJobs, legacyJobs, fetching } = useTraining();
+  const { jobs, datasets, completedJobs, runningJobs, failedJobs, legacyJobs, fetching } =
+    useTraining();
   const [models, setModels] = useState<RegisteredModel[] | null>(null);
   const [deployments, setDeployments] = useState<Deployment[] | null>(null);
+  const [loadingExtras, setLoadingExtras] = useState(true);
 
   useEffect(() => {
-    modelApi.getModels().then(setModels).catch(() => setModels(null));
-    deploymentApi.getDeployments().then(setDeployments).catch(() => setDeployments(null));
+    let isMounted = true;
+    Promise.allSettled([modelApi.getModels(), deploymentApi.getDeployments()]).then(
+      ([modelsRes, deploymentsRes]) => {
+        if (!isMounted) return;
+        if (modelsRes.status === 'fulfilled') {
+          setModels(modelsRes.value);
+        } else {
+          setModels([]);
+        }
+
+        if (deploymentsRes.status === 'fulfilled') {
+          setDeployments(deploymentsRes.value);
+        } else {
+          setDeployments([]);
+        }
+        setLoadingExtras(false);
+      }
+    );
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   const trainingActivity = useMemo<TrainingActivityItem[]>(() => {
@@ -43,24 +74,42 @@ export const DashboardPage: React.FC = () => {
       const month = new Date(now.getFullYear(), now.getMonth() - offset, 1);
       const key = `${month.getFullYear()}-${month.getMonth()}`;
       const count = jobs.filter((job) => {
-        if (String(job.status ?? '').toLowerCase() !== 'completed' || !job.created_at) return false;
+        if (String(job.status ?? '').toLowerCase() !== 'completed' || !job.created_at)
+          return false;
         const created = new Date(job.created_at);
-        return !Number.isNaN(created.getTime()) && `${created.getFullYear()}-${created.getMonth()}` === key;
+        return (
+          !Number.isNaN(created.getTime()) &&
+          `${created.getFullYear()}-${created.getMonth()}` === key
+        );
       }).length;
-      months.push({ month: month.toLocaleString(undefined, { month: 'short' }), jobs: count });
+      months.push({
+        month: month.toLocaleString(undefined, { month: 'short' }),
+        jobs: count,
+      });
     }
     return months;
   }, [jobs]);
 
   const latestMetrics = useMemo<ModelPerformanceItem[]>(() => {
-    const latest = jobs.find((job) => String(job.status ?? '').toLowerCase() === 'completed' && job.metrics);
+    const latest = jobs.find(
+      (job) => String(job.status ?? '').toLowerCase() === 'completed' && job.metrics
+    );
     if (!latest?.metrics) return [];
     return Object.entries(latest.metrics)
-      .filter((entry): entry is [string, number] => typeof entry[1] === 'number' && Number.isFinite(entry[1]))
+      .filter(
+        (entry): entry is [string, number] =>
+          typeof entry[1] === 'number' && Number.isFinite(entry[1])
+      )
       .map(([key, rawValue]) => {
-        const isRate = ['accuracy', 'precision', 'recall', 'f1', 'roc_auc'].includes(key.toLowerCase());
+        const isRate = ['accuracy', 'precision', 'recall', 'f1', 'roc_auc'].includes(
+          key.toLowerCase()
+        );
         const value = isRate && rawValue >= 0 && rawValue <= 1 ? rawValue * 100 : rawValue;
-        return { metric: METRIC_LABELS[key.toLowerCase()] || key, value, unit: isRate ? '%' : '' };
+        return {
+          metric: METRIC_LABELS[key.toLowerCase()] || key,
+          value,
+          unit: isRate ? '%' : '',
+        };
       });
   }, [jobs]);
 
@@ -69,7 +118,14 @@ export const DashboardPage: React.FC = () => {
     const groups = new Map<string, number>();
     deployments.forEach((deployment) => {
       const status = String(deployment.status || 'unknown').toLowerCase();
-      const label = status === 'active' ? 'Active' : status === 'inactive' ? 'Inactive' : status;
+      const label =
+        status === 'active' || status === 'running' || status === 'healthy'
+          ? 'Active'
+          : status === 'pending' || status === 'deploying'
+          ? 'Pending'
+          : status === 'inactive' || status === 'failed'
+          ? 'Inactive'
+          : 'Other';
       groups.set(label, (groups.get(label) || 0) + 1);
     });
     return Array.from(groups, ([name, value]) => ({ name, value }));
@@ -82,18 +138,27 @@ export const DashboardPage: React.FC = () => {
       const status = String(job.status || 'unknown').toLowerCase();
       const date = new Date(job.created_at);
       items.push({
-        type: status === 'failed' ? 'error' : status === 'running' || status === 'queued' ? 'warning' : 'success',
-        title: `Training ${status}`,
+        type:
+          status === 'failed'
+            ? 'error'
+            : status === 'running' || status === 'queued'
+            ? 'warning'
+            : 'success',
+        title: `Training ${status.charAt(0).toUpperCase() + status.slice(1)}`,
         description: job.name || `${job.algorithm || 'Model'} · run ${job.id ?? 'unknown'}`,
-        time: formatActivityTime(job.created_at), sortTime: date.getTime(),
+        time: formatActivityTime(job.created_at),
+        sortTime: date.getTime(),
       });
     });
     datasets.forEach((dataset) => {
       if (!dataset.uploaded_at) return;
       const date = new Date(dataset.uploaded_at);
       items.push({
-        type: 'success', title: 'Dataset uploaded', description: dataset.name,
-        time: formatActivityTime(dataset.uploaded_at), sortTime: date.getTime(),
+        type: 'success',
+        title: 'Dataset Uploaded',
+        description: dataset.name,
+        time: formatActivityTime(dataset.uploaded_at),
+        sortTime: date.getTime(),
       });
     });
     (deployments || []).forEach((deployment) => {
@@ -101,38 +166,86 @@ export const DashboardPage: React.FC = () => {
       const date = new Date(deployment.created_at);
       items.push({
         type: String(deployment.status).toLowerCase() === 'active' ? 'success' : 'warning',
-        title: `Deployment ${deployment.status || 'created'}`, description: deployment.name,
-        time: formatActivityTime(deployment.created_at), sortTime: date.getTime(),
+        title: `Deployment ${deployment.status || 'Created'}`,
+        description: deployment.name,
+        time: formatActivityTime(deployment.created_at),
+        sortTime: date.getTime(),
       });
     });
     return items.sort((a, b) => b.sortTime - a.sortTime).slice(0, 6);
   }, [jobs, datasets, deployments]);
 
-  const datasetValue = fetching ? '…' : String(datasets.length);
-  const modelValue = models ? String(models.length) : '—';
-  const deploymentValue = deployments ? String(deployments.length) : '—';
+  const isLoadingKPIs = fetching || loadingExtras;
 
   return (
-    <div className="mx-auto w-full max-w-[1440px] space-y-7">
+    <div className="mx-auto w-full max-w-[1520px] space-y-7">
       <div>
-        <h1 className="text-2xl font-bold text-slate-900">Dashboard Overview</h1>
-        <p className="text-slate-500 text-sm mt-1">Monitor your machine learning lifecycle from data to deployment.</p>
+        <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-slate-900 dark:text-white">
+          System Overview
+        </h1>
+        <p className="text-slate-500 dark:text-slate-400 text-sm mt-1">
+          Monitor your machine learning lifecycle from training datasets to live inference endpoints.
+        </p>
       </div>
 
+      {/* KPI Cards Grid */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 2xl:grid-cols-4">
-        <StatCard label="Datasets" value={datasetValue} subtext="Available for training" icon={Database} iconBgColor="bg-blue-100" iconColor="text-blue-600" />
-        <StatCard label="Training Jobs" value={fetching ? '…' : String(jobs.length)} subtext={`${completedJobs} completed, ${failedJobs} failed${runningJobs > 0 ? `, ${runningJobs} running` : ''}${legacyJobs > 0 ? ` (${legacyJobs} legacy)` : ''}`} icon={BrainCircuit} iconBgColor="bg-purple-100" iconColor="text-purple-600" />
-        <StatCard label="Registered Models" value={modelValue} subtext="Available in registry" subtextColor="text-indigo-600" icon={Box} iconBgColor="bg-indigo-100" iconColor="text-indigo-600" />
-        <StatCard label="Deployments" value={deploymentValue} subtext="Deployment records" icon={Rocket} iconBgColor="bg-green-100" iconColor="text-green-600" />
+        {isLoadingKPIs ? (
+          <>
+            <StatCardSkeleton />
+            <StatCardSkeleton />
+            <StatCardSkeleton />
+            <StatCardSkeleton />
+          </>
+        ) : (
+          <>
+            <StatCard
+              label="Datasets"
+              value={datasets.length}
+              subtext="Available for training"
+              icon={Database}
+              iconBgColor="bg-indigo-50 dark:bg-indigo-950/40"
+              iconColor="text-indigo-600 dark:text-indigo-400"
+            />
+            <StatCard
+              label="Training Jobs"
+              value={jobs.length}
+              subtext={`${completedJobs} completed, ${failedJobs} failed${
+                runningJobs > 0 ? `, ${runningJobs} active` : ''
+              }${legacyJobs > 0 ? ` (${legacyJobs} legacy)` : ''}`}
+              icon={BrainCircuit}
+              iconBgColor="bg-violet-50 dark:bg-violet-950/40"
+              iconColor="text-violet-600 dark:text-violet-400"
+            />
+            <StatCard
+              label="Registered Models"
+              value={models ? models.length : '0'}
+              subtext="Versioned in registry"
+              icon={Box}
+              iconBgColor="bg-indigo-50 dark:bg-indigo-950/40"
+              iconColor="text-indigo-600 dark:text-indigo-400"
+            />
+            <StatCard
+              label="Active Deployments"
+              value={deployments ? deployments.length : '0'}
+              subtext="Serving API endpoints"
+              icon={Rocket}
+              iconBgColor="bg-emerald-50 dark:bg-emerald-950/40"
+              iconColor="text-emerald-600 dark:text-emerald-400"
+            />
+          </>
+        )}
       </div>
 
+      {/* Charts Grid */}
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
         <TrainingActivityChart data={trainingActivity} loading={fetching} />
-        <ModelPerformanceChart data={latestMetrics} />
+        <ModelPerformanceChart data={latestMetrics} loading={fetching} />
       </div>
 
+      {/* Bottom Grid: Deployment Health & Recent Activity */}
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-3">
-        <DeploymentHealthChart data={deploymentHealth} loading={deployments === null} />
+        <DeploymentHealthChart data={deploymentHealth} loading={loadingExtras} />
         <RecentActivity activities={recentActivity} />
       </div>
     </div>

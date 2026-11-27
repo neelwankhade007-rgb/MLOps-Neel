@@ -1,0 +1,8 @@
+[
+  {"PassengerId": 1001, "Pclass": 1, "Sex": "female", "Age": 31, "SibSp": 1, "Parch": 0, "Ticket": "PC 17599", "Fare": 70, "Cabin": "C85", "Embarked": "C"},
+  {"PassengerId": 1002, "Pclass": 3, "Sex": "male", "Age": 24, "SibSp": 0, "Parch": 0, "Ticket": "113803", "Fare": 8, "Cabin": "C123", "Embarked": "S"},
+  {"PassengerId": 1003, "Pclass": 2, "Sex": "male", "Age": 42, "SibSp": 0, "Parch": 1, "Ticket": "248698", "Fare": 19, "Cabin": "E46", "Embarked": "S"},
+  {"PassengerId": 1004, "Pclass": 3, "Sex": "female", "Age": 12, "SibSp": 1, "Parch": 2, "Ticket": "PP 9549", "Fare": 17, "Cabin": "G6", "Embarked": "S"},
+  {"PassengerId": 1005, "Pclass": 1, "Sex": "male", "Age": 48, "SibSp": 0, "Parch": 0, "Ticket": "17463", "Fare": 52, "Cabin": "E46", "Embarked": "S"},
+  {"PassengerId": 1006, "Pclass": 2, "Sex": "female", "Age": 55, "SibSp": 0, "Parch": 0, "Ticket": "113803", "Fare": 31, "Cabin": "C123", "Embarked": "C"}
+]

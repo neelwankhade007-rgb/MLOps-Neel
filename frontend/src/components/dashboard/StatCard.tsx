@@ -15,21 +15,29 @@ export const StatCard: React.FC<StatCardProps> = ({
   label,
   value,
   subtext,
-  subtextColor = 'text-green-600',
+  subtextColor = 'text-emerald-600 dark:text-emerald-400',
   icon: Icon,
-  iconBgColor = 'bg-blue-100',
-  iconColor = 'text-blue-600',
+  iconBgColor = 'bg-indigo-50 dark:bg-indigo-950/40',
+  iconColor = 'text-indigo-600 dark:text-indigo-400',
 }) => {
   return (
-    <Card className="p-5">
+    <Card className="p-5 hoverable">
       <div className="flex items-center justify-between">
-        <div>
-          <p className="text-sm font-medium text-slate-500">{label}</p>
-          <p className="text-3xl font-bold text-slate-900 mt-1">{value}</p>
-          {subtext && <p className={`text-xs mt-2 ${subtextColor}`}>{subtext}</p>}
+        <div className="min-w-0 flex-1 pr-3">
+          <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+            {label}
+          </p>
+          <p className="text-2xl sm:text-3xl font-bold tracking-tight text-slate-900 dark:text-white mt-1 font-mono">
+            {value}
+          </p>
+          {subtext && (
+            <p className={`text-xs mt-1.5 font-medium truncate ${subtextColor}`}>
+              {subtext}
+            </p>
+          )}
         </div>
-        <div className={`p-3 rounded-xl ${iconBgColor} ${iconColor}`}>
-          <Icon size={24} />
+        <div className={`p-3 rounded-2xl shrink-0 ${iconBgColor} ${iconColor}`}>
+          <Icon size={22} />
         </div>
       </div>
     </Card>

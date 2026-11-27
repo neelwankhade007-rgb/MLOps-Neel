@@ -6,6 +6,7 @@ from typing import Optional
 import httpx
 from fastapi import FastAPI, HTTPException, Request, Response, status
 
+from benchmark_metrics import exposition, observe
 from router import RoundRobinRouter
 
 logging.basicConfig(level=logging.INFO)
@@ -62,8 +63,49 @@ def ready(response: Response):
 
 # -- prediction proxy -----------------------------------------------------
 
+@app.get("/metrics", include_in_schema=False)
+def metrics():
+    return Response(exposition(), media_type="text/plain; version=0.0.4")
+
+
 @app.post("/predict")
 async def predict(request: Request):
+    start = time.perf_counter_ns()
+    upstream_ns = [0, 0]
+    strategy = request.headers.get("X-Routing-Strategy", "round_robin").strip().lower()
+    label = strategy if strategy in ("round_robin", "weighted_round_robin", "adaptive") else "invalid"
+    outcome = "error"
+    try:
+        result = await forward_prediction(request, strategy, upstream_ns)
+        if not isinstance(result, Response) or result.status_code < 400:
+            outcome = "ok"
+        return result
+    finally:
+        observe("handler_processing", label, outcome,
+                time.perf_counter_ns() - start - upstream_ns[0])
+
+
+async def post_upstream(client, url, body, strategy, upstream_ns):
+    start = time.perf_counter_ns()
+    outcome = "error"
+    try:
+        response = await client.post(url, content=body, headers={"Content-Type": "application/json"})
+        outcome = "ok" if 200 <= response.status_code < 300 else "http_error"
+        return response
+    except httpx.TimeoutException:
+        outcome = "timeout"
+        raise
+    except httpx.ConnectError:
+        outcome = "connect_error"
+        raise
+    finally:
+        elapsed = time.perf_counter_ns() - start
+        upstream_ns[0] += elapsed
+        upstream_ns[1] = elapsed
+        observe("upstream_http", strategy, outcome, elapsed)
+
+
+async def forward_prediction(request: Request, strategy: str, upstream_ns: list[int]):
     """
     Forward a prediction request using the selected gateway strategy.
     """
@@ -75,7 +117,6 @@ async def predict(request: Request):
 
     # Validate model run consistency if caller requested a specific run
     expected_run_id = request.headers.get("X-Model-Run-ID")
-    strategy = request.headers.get("X-Routing-Strategy", "round_robin").strip().lower()
     if strategy not in ("round_robin", "weighted_round_robin", "adaptive"):
         raise HTTPException(status_code=400, detail="Unsupported gateway routing strategy")
     active_run_id = router.model_run_id or MODEL_RUN_ID
@@ -108,23 +149,18 @@ async def predict(request: Request):
 
             url = f"{target}/predict"
             attempted.append(target)
-            attempt_started = time.perf_counter()
             try:
-                upstream_resp = await client.post(
-                    url,
-                    content=body,
-                    headers={"Content-Type": "application/json"},
-                )
-                router.record_result(target, (time.perf_counter() - attempt_started) * 1000.0, upstream_resp.status_code)
+                upstream_resp = await post_upstream(client, url, body, strategy, upstream_ns)
+                router.record_result(target, upstream_ns[1] / 1e6, upstream_resp.status_code, strategy)
                 break  # Successfully communicated with replica
             except httpx.TimeoutException:
-                router.record_result(target, (time.perf_counter() - attempt_started) * 1000.0, None)
+                router.record_result(target, upstream_ns[1] / 1e6, None, strategy)
                 raise HTTPException(
                     status_code=status.HTTP_504_GATEWAY_TIMEOUT,
                     detail=f"Upstream replica timed out after {UPSTREAM_TIMEOUT_S}s",
                 )
             except httpx.ConnectError as exc:
-                router.record_result(target, (time.perf_counter() - attempt_started) * 1000.0, None)
+                router.record_result(target, upstream_ns[1] / 1e6, None, strategy)
                 last_error = exc
                 logger.warning(
                     "Connection error to replica %s (attempt %d/%d): %s",
@@ -136,7 +172,7 @@ async def predict(request: Request):
                         detail=f"Failed to connect to replica at {target}: {exc}",
                     )
             except httpx.HTTPError as exc:
-                router.record_result(target, (time.perf_counter() - attempt_started) * 1000.0, None)
+                router.record_result(target, upstream_ns[1] / 1e6, None, strategy)
                 raise HTTPException(
                     status_code=status.HTTP_502_BAD_GATEWAY,
                     detail=f"Upstream request failed: {exc}",
@@ -187,6 +223,17 @@ def list_replicas():
     return {
         "endpoints": router.endpoints,
         "count": router.endpoint_count,
+    }
+
+
+@app.get("/adaptive-scores")
+def adaptive_scores():
+    """Expose the scores and choice from the latest adaptive routing decision."""
+    decision = router.last_adaptive_decision()
+    return {
+        "scores": decision["scores"],
+        "selected_endpoint": decision["selected_endpoint"],
+        "calculated_at": decision["calculated_at"],
     }
 
 
