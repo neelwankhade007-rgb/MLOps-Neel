@@ -11,6 +11,8 @@ from datetime import datetime, timezone
 from collections import deque
 from typing import Any, Dict, List, Optional
 
+from benchmark_metrics import measured_lock, observe, timed
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("gateway_service")
 
@@ -68,6 +70,7 @@ class RoundRobinRouter:
         self._stop_event = threading.Event()
         self._discovery_thread: Optional[threading.Thread] = None
         self._model_run_id: Optional[str] = None
+        self._last_metrics_success_ns: Optional[int] = None
         self.check_health: bool = os.environ.get("CHECK_HEALTH_ON_DISCOVERY", "true").lower() in ("true", "1", "yes")
 
     # -- discovery --------------------------------------------------------
@@ -243,8 +246,13 @@ class RoundRobinRouter:
 
     def refresh_adaptive_metrics(self) -> Dict[str, float]:
         """Refresh pod CPU readings from Metrics Server, keyed by discovered endpoint URL."""
-        pods = self._k8s_get("/api/v1/namespaces/mlops/pods?labelSelector=app%3Dinference-service")
-        metrics = self._k8s_get("/apis/metrics.k8s.io/v1beta1/namespaces/mlops/pods")
+        start = time.perf_counter_ns()
+        try:
+            pods = self._k8s_get("/api/v1/namespaces/mlops/pods?labelSelector=app%3Dinference-service")
+            metrics = self._k8s_get("/apis/metrics.k8s.io/v1beta1/namespaces/mlops/pods")
+        except Exception:
+            observe("telemetry_retrieval", "background", "error", time.perf_counter_ns() - start)
+            raise
         cpu_by_ip: Dict[str, float] = {}
         cpu_sampled_at_by_ip: Dict[str, float] = {}
         if pods and metrics:
@@ -275,8 +283,12 @@ class RoundRobinRouter:
                     cpu_by_ip[pod_ip] = min(100.0, total_millicores / 500.0 * 100.0)
                     cpu_sampled_at_by_ip[pod_ip] = sampled_at
 
+        completed = time.perf_counter_ns()
+        outcome = "ok" if pods and metrics and cpu_by_ip else "missing"
+        observe("telemetry_retrieval", "background", outcome, completed - start)
         with self._metrics_lock:
             with self._lock:
+                install_start = time.perf_counter_ns()
                 ready_ips = list(self._endpoints)
                 self._cpu_pct = {
                     f"http://{ip}:{INFERENCE_PORT}": cpu_by_ip[ip]
@@ -286,7 +298,20 @@ class RoundRobinRouter:
                     f"http://{ip}:{INFERENCE_PORT}": cpu_sampled_at_by_ip[ip]
                     for ip in ready_ips if ip in cpu_sampled_at_by_ip
                 }
-                return dict(self._cpu_pct)
+                result = dict(self._cpu_pct)
+                installed_sources = tuple(self._cpu_sampled_at.values())
+                install_ns = time.perf_counter_ns() - install_start
+        observe("cache_install", "background", "ok" if result else "missing", install_ns)
+        if result:
+            installed = time.perf_counter_ns()
+            if self._last_metrics_success_ns is not None:
+                observe("refresh_interval", "background", "ok",
+                        installed - self._last_metrics_success_ns)
+            self._last_metrics_success_ns = installed
+            for sampled_at in installed_sources:
+                sample_age = max(0.0, time.time() - sampled_at)
+                observe("telemetry_source_age", "background", "ok", int(sample_age * 1e9))
+        return result
 
     def _adaptive_scores_locked(self) -> Dict[str, float]:
         endpoints = [f"http://{ip}:{INFERENCE_PORT}" for ip in self._endpoints]
@@ -295,70 +320,72 @@ class RoundRobinRouter:
         rows = {}
         now_monotonic = time.monotonic()
         now_epoch = time.time()
-        for endpoint in endpoints:
-            observation = self._observations.setdefault(endpoint, self._new_observation())
-            latencies = list(observation["latencies"])
-            errors = list(observation["errors"])
-            latency_is_fresh = self._is_fresh(
-                observation.get("latency_at"), now_monotonic, ADAPTIVE_METRIC_MAX_AGE_S
-            )
-            error_is_fresh = self._is_fresh(
-                observation.get("error_at"), now_monotonic, ADAPTIVE_METRIC_MAX_AGE_S
-            )
-            cpu_is_fresh = self._is_fresh(
-                self._cpu_sampled_at.get(endpoint), now_epoch, ADAPTIVE_METRIC_MAX_AGE_S
-            )
-            rows[endpoint] = {
-                "latency": sum(latencies) / len(latencies) if latencies and latency_is_fresh else None,
-                "active": int(observation["active"]),
-                "cpu": self._cpu_pct.get(endpoint) if cpu_is_fresh else None,
-                "error": sum(errors) / len(errors) if errors and error_is_fresh else None,
-            }
-
-        # Smooth raw measurements first, then normalize the smoothed values.
-        smoothed_rows: Dict[str, Dict[str, Optional[float]]] = {}
-        for endpoint, row in rows.items():
-            endpoint_ema = self._adaptive_ema.setdefault(endpoint, {})
-            smoothed_rows[endpoint] = {}
-            for key, value in row.items():
-                if value is None:
-                    smoothed_rows[endpoint][key] = None
-                    continue
-                previous = endpoint_ema.get(key)
-                smoothed = float(value) if previous is None else (
-                    ADAPTIVE_EMA_ALPHA * float(value) + (1.0 - ADAPTIVE_EMA_ALPHA) * previous
+        with timed("cache_access", "adaptive"):
+            for endpoint in endpoints:
+                observation = self._observations.setdefault(endpoint, self._new_observation())
+                latencies = list(observation["latencies"])
+                errors = list(observation["errors"])
+                latency_is_fresh = self._is_fresh(
+                    observation.get("latency_at"), now_monotonic, ADAPTIVE_METRIC_MAX_AGE_S
                 )
-                endpoint_ema[key] = smoothed
-                smoothed_rows[endpoint][key] = smoothed
+                error_is_fresh = self._is_fresh(
+                    observation.get("error_at"), now_monotonic, ADAPTIVE_METRIC_MAX_AGE_S
+                )
+                cpu_is_fresh = self._is_fresh(
+                    self._cpu_sampled_at.get(endpoint), now_epoch, ADAPTIVE_METRIC_MAX_AGE_S
+                )
+                rows[endpoint] = {
+                    "latency": sum(latencies) / len(latencies) if latencies and latency_is_fresh else None,
+                    "active": int(observation["active"]),
+                    "cpu": self._cpu_pct.get(endpoint) if cpu_is_fresh else None,
+                    "error": sum(errors) / len(errors) if errors and error_is_fresh else None,
+                }
 
-        available = {
-            key: [row[key] for row in smoothed_rows.values() if row[key] is not None]
-            for key in ADAPTIVE_WEIGHTS
-        }
-        usable = {key: bool(values) for key, values in available.items()}
-        if not any(usable.values()):
-            usable["active"] = True
-        weight_total = sum(ADAPTIVE_WEIGHTS[key] for key in usable if usable[key])
-        scores = {endpoint: 0.0 for endpoint in endpoints}
-        for key, weight in ADAPTIVE_WEIGHTS.items():
-            if not usable[key]:
-                continue
-            values = available[key]
-            minimum = min(values) if values else 0.0
-            maximum = max(values) if values else 0.0
-            for endpoint, row in smoothed_rows.items():
-                value = row[key]
-                # A missing sample is treated as the worst observed value, never as a free win.
-                if value is None:
-                    normalized = 1.0
-                elif maximum == minimum:
-                    # Equal readings carry no relative information between replicas.
-                    normalized = 0.0
-                else:
-                    normalized = min(1.0, max(0.0, (float(value) - minimum) / (maximum - minimum)))
+        with timed("score_computation", "adaptive"):
+            # Smooth raw measurements first, then normalize the smoothed values.
+            smoothed_rows: Dict[str, Dict[str, Optional[float]]] = {}
+            for endpoint, row in rows.items():
+                endpoint_ema = self._adaptive_ema.setdefault(endpoint, {})
+                smoothed_rows[endpoint] = {}
+                for key, value in row.items():
+                    if value is None:
+                        smoothed_rows[endpoint][key] = None
+                        continue
+                    previous = endpoint_ema.get(key)
+                    smoothed = float(value) if previous is None else (
+                        ADAPTIVE_EMA_ALPHA * float(value) + (1.0 - ADAPTIVE_EMA_ALPHA) * previous
+                    )
+                    endpoint_ema[key] = smoothed
+                    smoothed_rows[endpoint][key] = smoothed
 
-                scores[endpoint] += (weight / weight_total) * normalized
-        return scores
+            available = {
+                key: [row[key] for row in smoothed_rows.values() if row[key] is not None]
+                for key in ADAPTIVE_WEIGHTS
+            }
+            usable = {key: bool(values) for key, values in available.items()}
+            if not any(usable.values()):
+                usable["active"] = True
+            weight_total = sum(ADAPTIVE_WEIGHTS[key] for key in usable if usable[key])
+            scores = {endpoint: 0.0 for endpoint in endpoints}
+            for key, weight in ADAPTIVE_WEIGHTS.items():
+                if not usable[key]:
+                    continue
+                values = available[key]
+                minimum = min(values) if values else 0.0
+                maximum = max(values) if values else 0.0
+                for endpoint, row in smoothed_rows.items():
+                    value = row[key]
+                    # A missing sample is treated as the worst observed value, never as a free win.
+                    if value is None:
+                        normalized = 1.0
+                    elif maximum == minimum:
+                        # Equal readings carry no relative information between replicas.
+                        normalized = 0.0
+                    else:
+                        normalized = min(1.0, max(0.0, (float(value) - minimum) / (maximum - minimum)))
+
+                    scores[endpoint] += (weight / weight_total) * normalized
+            return scores
 
     def adaptive_scores(self) -> Dict[str, float]:
         with self._lock:
@@ -375,7 +402,7 @@ class RoundRobinRouter:
 
     def next_endpoint(self, strategy: str = "round_robin", exclude: Optional[List[str]] = None) -> Optional[str]:
         """Select a ready endpoint by RR, WRR, or lowest healthy-replica penalty."""
-        with self._lock:
+        with measured_lock(self._lock, strategy):
             if not self._endpoints:
                 return None
             excluded = set(exclude or [])
@@ -383,12 +410,19 @@ class RoundRobinRouter:
             weights = [self._weights[i] if i < len(self._weights) else 1 for i in range(count)]
             if len(self._wrr_current) != count:
                 self._wrr_current = [0] * count
+            if strategy == "weighted_round_robin":
+                candidates = [
+                    i for i, ip in enumerate(self._endpoints)
+                    if f"http://{ip}:{INFERENCE_PORT}" not in excluded
+                ]
+                if not candidates:
+                    return None
             for _ in range(count):
                 if strategy == "weighted_round_robin":
-                    total = sum(weights)
-                    for i, weight in enumerate(weights):
-                        self._wrr_current[i] += weight
-                    index = max(range(count), key=lambda i: self._wrr_current[i])
+                    total = sum(weights[i] for i in candidates)
+                    for i in candidates:
+                        self._wrr_current[i] += weights[i]
+                    index = max(candidates, key=lambda i: self._wrr_current[i])
                     self._wrr_current[index] -= total
                 elif strategy == "adaptive":
                     scores = self._adaptive_scores_locked()
@@ -414,9 +448,9 @@ class RoundRobinRouter:
                     return url
             return None
 
-    def record_result(self, endpoint: str, latency_ms: float, status_code: Optional[int]) -> None:
+    def record_result(self, endpoint: str, latency_ms: float, status_code: Optional[int], strategy: str = "round_robin") -> None:
         """Update rolling routing signals after a completed or failed upstream attempt."""
-        with self._lock:
+        with measured_lock(self._lock, strategy):
             if endpoint not in {f"http://{ip}:{INFERENCE_PORT}" for ip in self._endpoints}:
                 return
             observation = self._observations.setdefault(endpoint, self._new_observation())

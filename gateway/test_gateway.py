@@ -197,6 +197,17 @@ class TestRoundRobinRouter:
         assert first != second
         assert second in ("http://10.0.0.1:8000", "http://10.0.0.3:8000")
 
+    def test_wrr_retry_progresses_under_extreme_weight_skew(self):
+        r = RoundRobinRouter()
+        r.set_weights([1000, 2, 1])
+        r._endpoints = ["10.0.0.1", "10.0.0.2", "10.0.0.3"]
+        first = r.next_endpoint("weighted_round_robin")
+        assert first == "http://10.0.0.1:8000"
+        assert r.next_endpoint("weighted_round_robin", exclude=[first]) == "http://10.0.0.2:8000"
+        before = r._wrr_current.copy()
+        assert r.next_endpoint("weighted_round_robin", exclude=[f"http://{ip}:8000" for ip in r.endpoints]) is None
+        assert r._wrr_current == before
+
     def test_wrr_weights_must_be_positive_integers(self):
         with patch.dict("os.environ", {"WRR_WEIGHTS": "5,0,2"}):
             with pytest.raises(ValueError, match="positive integers"):
@@ -510,6 +521,28 @@ class TestGatewayServiceEndpoints:
                 "http://10.0.0.1:8000/predict",
                 "http://10.0.0.2:8000/predict",
             ]
+
+    def test_wrr_retry_exports_attempt_and_exclusive_handler_spans(self, client):
+        from benchmark_metrics import _totals
+
+        before = {key: values[0] for key, values in _totals.items()}
+        strategy = "weighted_round_robin"
+        fallback = httpx.Response(200, json={"prediction": "1", "replica_id": "pod-2"})
+        with patch.object(router, "_endpoints", ["10.0.0.1", "10.0.0.2"]), \
+             patch.object(router, "_weights", [1000, 1]), \
+             patch.object(router, "_wrr_current", [0, 0]), \
+             patch("httpx.AsyncClient.post", side_effect=[httpx.ConnectError("test"), fallback]) as post:
+            response = client.post("/predict", json={"features": {"x": 1}},
+                                   headers={"X-Routing-Strategy": strategy})
+        assert response.status_code == 200
+        assert [request.args[0] for request in post.call_args_list] == [
+            "http://10.0.0.1:8000/predict", "http://10.0.0.2:8000/predict",
+        ]
+        for span, outcome in [("upstream_http", "connect_error"), ("upstream_http", "ok"),
+                              ("handler_processing", "ok")]:
+            key = span, strategy, outcome
+            assert _totals[key][0] - before.get(key, 0) == 1
+        assert "gateway_span_duration_seconds_count" in client.get("/metrics").text
 
     def test_predict_all_replicas_fail_returns_502(self, client):
         """If all bounded connection attempts fail, returns 502 Bad Gateway."""

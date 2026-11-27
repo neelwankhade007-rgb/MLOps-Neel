@@ -77,4 +77,6 @@ test_housing.csv
 IMPLEMENTATION_REPORT.md
 .kilo
 
-
+# Local benchmark documentation and credentials
+/results.md
+*.dpapi.json
